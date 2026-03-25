@@ -1,0 +1,42 @@
+# 构建产物
+build/
+out/
+bin/
+obj/
+*.exe
+*.dll
+*.lib
+*.obj
+*.o
+*.a
+*.so
+*.exp
+*.pdb
+*.ilk
+
+# IDE / 编辑器
+.vs/
+.vscode/
+*.sln.docstates
+*.user
+*.suo
+*.swp
+*~
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# 依赖
+third_party/
+external/
+
+# 系统文件
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# CodeBuddy
+.codebuddy/
