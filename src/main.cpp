@@ -145,6 +145,7 @@ int main(int argc, char* argv[]) {
     // ============================================================
     struct WallpaperWindow {
         SDL_Window* window = nullptr;
+        int x = 0, y = 0;          // 显示器屏幕坐标
         int width = 0, height = 0;
     };
     std::vector<WallpaperWindow> wallpaperWindows;
@@ -201,6 +202,8 @@ int main(int argc, char* argv[]) {
 
             WallpaperWindow ww;
             ww.window = win;
+            ww.x = mon.x;
+            ww.y = mon.y;
             ww.width = mon.width;
             ww.height = mon.height;
             wallpaperWindows.push_back(ww);
@@ -436,19 +439,16 @@ int main(int argc, char* argv[]) {
         }
 
         // 壁纸模式：SDL 收不到鼠标事件，改用 Win32 全局鼠标状态
+        // 存储原始屏幕坐标，渲染时再转各窗口局部坐标
 #ifdef _WIN32
         if (config.wallpaperMode) {
             POINT pt;
             GetCursorPos(&pt);
-            // 屏幕坐标转渲染窗口坐标（减去虚拟桌面偏移）
-            int vx, vy;
-            Wallpaper::GetVirtualDesktopOffset(vx, vy);
-            mouse[0] = static_cast<float>(pt.x - vx);
-            mouse[1] = static_cast<float>(config.height - (pt.y - vy));
+            mouse[0] = static_cast<float>(pt.x);
+            mouse[1] = static_cast<float>(pt.y);
 
             bool leftDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
             if (leftDown && !mousePressed) {
-                // 刚按下
                 mousePressed = true;
                 mouse[2] = mouse[0];
                 mouse[3] = mouse[1];
@@ -536,12 +536,46 @@ int main(int argc, char* argv[]) {
 
         // 渲染
         if (config.wallpaperMode && !wallpaperWindows.empty()) {
-            // 壁纸模式：依次渲染每个显示器窗口
+            // 壁纸模式：依次渲染每个显示器窗口，鼠标坐标转局部
             for (auto& ww : wallpaperWindows) {
                 SDL_GL_MakeCurrent(ww.window, glContext);
                 renderer.SetViewport(ww.width, ww.height);
+
+                // 将全局屏幕坐标转为当前窗口的局部坐标（ShaderToy Y 从底部开始）
+                float localMouse[4];
+                float localX = mouse[0] - static_cast<float>(ww.x);
+                float localY = static_cast<float>(ww.height) - (mouse[1] - static_cast<float>(ww.y));
+                bool inThisMonitor = (localX >= 0 && localX < ww.width &&
+                                      localY >= 0 && localY < ww.height);
+
+                localMouse[0] = inThisMonitor ? localX : -1.0f;
+                localMouse[1] = inThisMonitor ? localY : -1.0f;
+
+                // zw（点击位置）也转局部
+                float clickAbsX = fabsf(mouse[2]);
+                float clickAbsY = fabsf(mouse[3]);
+                float clickLocalX = clickAbsX - static_cast<float>(ww.x);
+                float clickLocalY = static_cast<float>(ww.height) - (clickAbsY - static_cast<float>(ww.y));
+                bool clickInThis = (clickLocalX >= 0 && clickLocalX < ww.width &&
+                                    clickLocalY >= 0 && clickLocalY < ww.height);
+
+                if (clickInThis) {
+                    // 保持正/负号（正=按住，负=已松开）
+                    localMouse[2] = (mouse[2] >= 0) ? clickLocalX : -clickLocalX;
+                    localMouse[3] = (mouse[3] >= 0) ? clickLocalY : -clickLocalY;
+                } else {
+                    localMouse[2] = 0.0f;
+                    localMouse[3] = 0.0f;
+                }
+
+                // 设置每个窗口独立的 iResolution
+                shader.Use();
+                glUniform3f(shader.GetUniformLocation("iResolution"),
+                            static_cast<float>(ww.width),
+                            static_cast<float>(ww.height), 1.0f);
+
                 renderer.RenderFrame(shader, currentTime, timeDelta, frameCount,
-                                    mouse, date);
+                                    localMouse, date);
                 SDL_GL_SwapWindow(ww.window);
             }
         } else {
