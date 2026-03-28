@@ -266,7 +266,10 @@ int main(int argc, char* argv[]) {
         config.renderScale = config.wallpaperMode ? 0.5f : 1.0f;
     }
 
-    // 壁纸模式关闭 VSync，用 SDL_Delay 控制帧率（避免 VSync 强制 60fps 导致降帧参数无效）
+    // 壁纸模式关闭 VSync：
+    //   1. WorkerW 嵌入窗口的 VSync 行为因驱动而异，可能不生效或行为异常
+    //   2. 壁纸在桌面图标下方，不需要防撕裂
+    //   3. 改用 SDL_Delay 手动控帧，精确控制帧率且让 CPU/GPU 充分休息
     SDL_GL_SetSwapInterval(config.wallpaperMode ? 0 : 1);
 
     std::cout << "Target FPS: " << config.targetFPS
