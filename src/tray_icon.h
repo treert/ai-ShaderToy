@@ -22,7 +22,7 @@ public:
     TrayIcon();
     ~TrayIcon();
 
-    /// 创建系统托盘图标
+    /// 创建系统托盘图标（图标从 exe 内嵌资源加载）
     bool Create(SDL_Window* window, const MenuCallbacks& callbacks);
 
     /// 处理窗口消息（在事件循环中调用）

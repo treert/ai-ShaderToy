@@ -42,6 +42,7 @@ set(SOURCES
     src/multi_pass.cpp
     src/file_watcher.cpp
     src/tray_icon.cpp
+    src/app.rc
 )
 
 set(HEADERS

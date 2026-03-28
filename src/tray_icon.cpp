@@ -1,4 +1,5 @@
 #include "tray_icon.h"
+#include "resource.h"
 #include <iostream>
 #include <SDL_syswm.h>
 
@@ -65,6 +66,15 @@ bool TrayIcon::Create(SDL_Window* window, const MenuCallbacks& callbacks) {
         return false;
     }
 
+    // 从 exe 内嵌资源加载图标，失败则用系统默认
+    HICON hIcon = (HICON)LoadImageW(GetModuleHandle(nullptr),
+                                    MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON,
+                                    GetSystemMetrics(SM_CXSMICON),
+                                    GetSystemMetrics(SM_CYSMICON), 0);
+    if (!hIcon) {
+        hIcon = LoadIconW(nullptr, MAKEINTRESOURCEW(32512)); // IDI_APPLICATION
+    }
+
     // 创建托盘图标
     ZeroMemory(&nid_, sizeof(nid_));
     nid_.cbSize = sizeof(nid_);
@@ -72,7 +82,7 @@ bool TrayIcon::Create(SDL_Window* window, const MenuCallbacks& callbacks) {
     nid_.uID = 1;
     nid_.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     nid_.uCallbackMessage = WM_TRAYICON;
-    nid_.hIcon = LoadIconW(nullptr, MAKEINTRESOURCEW(32512)); // IDI_APPLICATION
+    nid_.hIcon = hIcon;
     wcscpy_s(nid_.szTip, L"ShaderToy Desktop");
 
     if (!Shell_NotifyIconW(NIM_ADD, &nid_)) {
