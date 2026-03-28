@@ -1,6 +1,9 @@
 #include <iostream>
 #include <string>
 #include <ctime>
+#include <vector>
+#include <atomic>
+#include <mutex>
 
 #include <glad/glad.h>
 #include <SDL.h>
@@ -8,6 +11,10 @@
 #include "renderer.h"
 #include "shader_manager.h"
 #include "wallpaper.h"
+#include "texture_manager.h"
+#include "multi_pass.h"
+#include "file_watcher.h"
+#include "tray_icon.h"
 
 // 默认参数
 static const int    kDefaultWidth  = 800;
@@ -17,21 +24,44 @@ static const char*  kWindowTitle   = "ShaderToy Desktop";
 
 struct AppConfig {
     std::string shaderPath = kDefaultShader;
+    std::string channel0;  // iChannel0 纹理路径
+    std::string channel1;  // iChannel1 纹理路径
+    std::string channel2;  // iChannel2 纹理路径
+    std::string channel3;  // iChannel3 纹理路径
     bool        wallpaperMode = false;
+    bool        hotReload = true;
     int         width  = kDefaultWidth;
     int         height = kDefaultHeight;
     int         targetFPS = 60;
 };
 
+/// 确保有控制台可以输出（WIN32 子系统默认没有控制台）
+static void EnsureConsole() {
+#ifdef _WIN32
+    if (!AttachConsole(ATTACH_PARENT_PROCESS)) {
+        AllocConsole();
+    }
+    FILE* fp = nullptr;
+    freopen_s(&fp, "CONOUT$", "w", stdout);
+    freopen_s(&fp, "CONOUT$", "w", stderr);
+#endif
+}
+
 static void PrintUsage(const char* programName) {
+    EnsureConsole();
     std::cout << "Usage: " << programName << " [options]\n"
               << "Options:\n"
-              << "  --shader <path>    Path to ShaderToy GLSL file (default: " << kDefaultShader << ")\n"
-              << "  --wallpaper        Run as desktop wallpaper\n"
-              << "  --width <n>        Window width (default: " << kDefaultWidth << ")\n"
-              << "  --height <n>       Window height (default: " << kDefaultHeight << ")\n"
-              << "  --fps <n>          Target FPS (default: 60)\n"
-              << "  --help             Show this help\n";
+              << "  --shader <path>      Path to ShaderToy GLSL file (default: " << kDefaultShader << ")\n"
+              << "  --channel0 <path>    iChannel0 texture image\n"
+              << "  --channel1 <path>    iChannel1 texture image\n"
+              << "  --channel2 <path>    iChannel2 texture image\n"
+              << "  --channel3 <path>    iChannel3 texture image\n"
+              << "  --wallpaper          Run as desktop wallpaper\n"
+              << "  --no-hotreload       Disable shader hot reload\n"
+              << "  --width <n>          Window width (default: " << kDefaultWidth << ")\n"
+              << "  --height <n>         Window height (default: " << kDefaultHeight << ")\n"
+              << "  --fps <n>            Target FPS (default: 60)\n"
+              << "  --help, -h           Show this help\n";
 }
 
 static AppConfig ParseArgs(int argc, char* argv[]) {
@@ -40,15 +70,25 @@ static AppConfig ParseArgs(int argc, char* argv[]) {
         std::string arg = argv[i];
         if (arg == "--shader" && i + 1 < argc) {
             config.shaderPath = argv[++i];
+        } else if (arg == "--channel0" && i + 1 < argc) {
+            config.channel0 = argv[++i];
+        } else if (arg == "--channel1" && i + 1 < argc) {
+            config.channel1 = argv[++i];
+        } else if (arg == "--channel2" && i + 1 < argc) {
+            config.channel2 = argv[++i];
+        } else if (arg == "--channel3" && i + 1 < argc) {
+            config.channel3 = argv[++i];
         } else if (arg == "--wallpaper") {
             config.wallpaperMode = true;
+        } else if (arg == "--no-hotreload") {
+            config.hotReload = false;
         } else if (arg == "--width" && i + 1 < argc) {
             config.width = std::atoi(argv[++i]);
         } else if (arg == "--height" && i + 1 < argc) {
             config.height = std::atoi(argv[++i]);
         } else if (arg == "--fps" && i + 1 < argc) {
             config.targetFPS = std::atoi(argv[++i]);
-        } else if (arg == "--help") {
+        } else if (arg == "--help" || arg == "-h") {
             PrintUsage(argv[0]);
             exit(0);
         }
@@ -133,7 +173,7 @@ int main(int argc, char* argv[]) {
     }
 
     // ============================================================
-    // 初始化渲染器和着色器
+    // 初始化渲染器
     // ============================================================
     Renderer renderer;
     if (!renderer.Init()) {
@@ -145,6 +185,18 @@ int main(int argc, char* argv[]) {
     }
     renderer.SetViewport(config.width, config.height);
 
+    // ============================================================
+    // 加载纹理
+    // ============================================================
+    TextureManager textures;
+    if (!config.channel0.empty()) textures.LoadTexture(0, config.channel0);
+    if (!config.channel1.empty()) textures.LoadTexture(1, config.channel1);
+    if (!config.channel2.empty()) textures.LoadTexture(2, config.channel2);
+    if (!config.channel3.empty()) textures.LoadTexture(3, config.channel3);
+
+    // ============================================================
+    // 加载着色器
+    // ============================================================
     ShaderManager shader;
     if (!shader.LoadFromFile(config.shaderPath)) {
         std::cerr << "Failed to load shader: " << shader.GetLastError() << std::endl;
@@ -155,16 +207,46 @@ int main(int argc, char* argv[]) {
     }
 
     std::cout << "Shader loaded: " << config.shaderPath << std::endl;
+
+    // ============================================================
+    // 热加载
+    // ============================================================
+    std::atomic<bool> shaderNeedsReload{false};
+    FileWatcher watcher;
+    if (config.hotReload) {
+        watcher.Watch(config.shaderPath, [&](const std::string&) {
+            shaderNeedsReload.store(true);
+        });
+        std::cout << "Hot reload enabled." << std::endl;
+    }
+
+    // ============================================================
+    // 系统托盘（壁纸模式下启用）
+    // ============================================================
+    std::atomic<bool> paused{false};
+    bool running = true;
+    TrayIcon tray;
+    if (config.wallpaperMode) {
+        TrayIcon::MenuCallbacks cb;
+        cb.onPause  = [&]() { paused = true;  std::cout << "Paused." << std::endl; };
+        cb.onResume = [&]() { paused = false; std::cout << "Resumed." << std::endl; };
+        cb.onReload = [&]() { shaderNeedsReload = true; std::cout << "Reload requested." << std::endl; };
+        cb.onQuit   = [&]() { running = false; };
+        tray.Create(window, cb);
+    }
+
+    // ============================================================
+    // 打印运行模式
+    // ============================================================
     if (config.wallpaperMode) {
         std::cout << "Running in wallpaper mode." << std::endl;
     } else {
-        std::cout << "Running in window mode. Press ESC to exit." << std::endl;
+        std::cout << "Running in window mode. Press ESC to exit, F5 to reload shader." << std::endl;
     }
 
     // ============================================================
     // 主循环
     // ============================================================
-    bool running = true;
     Uint64 startTime = SDL_GetPerformanceCounter();
     Uint64 freq = SDL_GetPerformanceFrequency();
     float lastFrameTime = 0.0f;
@@ -178,6 +260,8 @@ int main(int argc, char* argv[]) {
         // 事件处理
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
+            tray.HandleEvent(event);
+
             switch (event.type) {
             case SDL_QUIT:
                 running = false;
@@ -185,6 +269,8 @@ int main(int argc, char* argv[]) {
             case SDL_KEYDOWN:
                 if (event.key.keysym.sym == SDLK_ESCAPE) {
                     running = false;
+                } else if (event.key.keysym.sym == SDLK_F5) {
+                    shaderNeedsReload = true;
                 }
                 break;
             case SDL_WINDOWEVENT:
@@ -215,6 +301,23 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        // 热加载：重新编译 shader
+        if (shaderNeedsReload.exchange(false)) {
+            ShaderManager newShader;
+            if (newShader.LoadFromFile(config.shaderPath)) {
+                shader = std::move(newShader);
+                std::cout << "Shader reloaded successfully." << std::endl;
+            } else {
+                std::cerr << "Shader reload failed: " << newShader.GetLastError() << std::endl;
+            }
+        }
+
+        // 暂停时跳过渲染
+        if (paused) {
+            SDL_Delay(100);
+            continue;
+        }
+
         // 时间计算
         Uint64 now = SDL_GetPerformanceCounter();
         float currentTime = static_cast<float>(now - startTime) / static_cast<float>(freq);
@@ -227,10 +330,23 @@ int main(int argc, char* argv[]) {
         localtime_s(&localTm, &rawTime);
         float date[4] = {
             static_cast<float>(localTm.tm_year + 1900),
-            static_cast<float>(localTm.tm_mon),       // 0-11，与 ShaderToy 一致
+            static_cast<float>(localTm.tm_mon),
             static_cast<float>(localTm.tm_mday),
             static_cast<float>(localTm.tm_hour * 3600 + localTm.tm_min * 60 + localTm.tm_sec)
         };
+
+        // 绑定纹理并设置 iChannel uniform
+        textures.BindAll();
+        shader.Use();
+        for (int i = 0; i < 4; ++i) {
+            char name[16];
+            snprintf(name, sizeof(name), "iChannel%d", i);
+            glUniform1i(shader.GetUniformLocation(name), i);
+        }
+        // 设置 iChannelResolution
+        float channelRes[4][3];
+        textures.GetAllResolutions(channelRes);
+        glUniform3fv(shader.GetUniformLocation("iChannelResolution"), 4, &channelRes[0][0]);
 
         // 渲染
         renderer.RenderFrame(shader, currentTime, timeDelta, frameCount,
@@ -239,7 +355,7 @@ int main(int argc, char* argv[]) {
         SDL_GL_SwapWindow(window);
         frameCount++;
 
-        // 帧率控制（如果不使用 VSync）
+        // 帧率控制
         if (config.targetFPS > 0) {
             float targetFrameTime = 1.0f / config.targetFPS;
             if (timeDelta < targetFrameTime) {
@@ -251,6 +367,9 @@ int main(int argc, char* argv[]) {
     // ============================================================
     // 清理
     // ============================================================
+    watcher.Stop();
+    tray.Destroy();
+
     if (config.wallpaperMode) {
         Wallpaper::Restore();
     }

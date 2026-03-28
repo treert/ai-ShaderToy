@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(ShaderToyDesktop VERSION 0.1.0 LANGUAGES C CXX)
+project(ShaderToyDesktop VERSION 0.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -38,12 +38,21 @@ set(SOURCES
     src/renderer.cpp
     src/shader_manager.cpp
     src/wallpaper.cpp
+    src/texture_manager.cpp
+    src/multi_pass.cpp
+    src/file_watcher.cpp
+    src/tray_icon.cpp
 )
 
 set(HEADERS
     src/renderer.h
     src/shader_manager.h
     src/wallpaper.h
+    src/texture_manager.h
+    src/multi_pass.h
+    src/file_watcher.h
+    src/tray_icon.h
+    src/stb_image.h
 )
 
 add_executable(${PROJECT_NAME} WIN32 ${SOURCES} ${HEADERS})

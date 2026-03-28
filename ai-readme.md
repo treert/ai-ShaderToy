@@ -26,12 +26,13 @@ AI 在运行时按需持续更新本文件。
 - [x] 鼠标交互（iMouse 完整语义）
 - [x] 命令行参数控制
 
-### 阶段 2：支持 shadertoy.com 的 shader（待实现）
-- [ ] iChannel 纹理输入（sampler2D，支持图片加载）
-- [ ] 多 Pass 渲染（Buffer A/B/C/D）
+### 阶段 2：支持 shadertoy.com 的 shader ✅ 已完成
+- [x] iChannel 纹理输入（sampler2D，支持图片加载 via stb_image）
+- [x] iChannelResolution uniform
+- [x] 多 Pass 渲染框架（Buffer A/B/C/D + Image，FBO 双缓冲）
+- [x] Shader 热加载（文件监控自动刷新 + F5 手动刷新）
+- [x] 系统托盘图标和控制界面（暂停/恢复/重载/退出）
 - [ ] iSampleRate 音频采样率接入
-- [ ] Shader 热加载 / 文件监控自动刷新
-- [ ] 系统托盘图标和控制界面
 - [ ] 多显示器支持
 - [ ] 全屏应用检测与自动暂停
 - [ ] GPU 性能优化（帧率自适应）

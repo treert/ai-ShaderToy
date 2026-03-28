@@ -10,6 +10,12 @@ public:
     ShaderManager();
     ~ShaderManager();
 
+    // 支持 move（用于热加载替换）
+    ShaderManager(ShaderManager&& other) noexcept;
+    ShaderManager& operator=(ShaderManager&& other) noexcept;
+    ShaderManager(const ShaderManager&) = delete;
+    ShaderManager& operator=(const ShaderManager&) = delete;
+
     /// 从文件加载 ShaderToy 格式的着色器源码并编译
     bool LoadFromFile(const std::string& filePath);
 

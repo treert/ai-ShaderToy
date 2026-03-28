@@ -19,6 +19,21 @@ ShaderManager::~ShaderManager() {
     Cleanup();
 }
 
+ShaderManager::ShaderManager(ShaderManager&& other) noexcept
+    : program_(other.program_), lastError_(std::move(other.lastError_)) {
+    other.program_ = 0;
+}
+
+ShaderManager& ShaderManager::operator=(ShaderManager&& other) noexcept {
+    if (this != &other) {
+        Cleanup();
+        program_ = other.program_;
+        lastError_ = std::move(other.lastError_);
+        other.program_ = 0;
+    }
+    return *this;
+}
+
 bool ShaderManager::LoadFromFile(const std::string& filePath) {
     std::ifstream file(filePath);
     if (!file.is_open()) {
@@ -82,6 +97,11 @@ uniform int       iFrame;               // 帧计数
 uniform vec4      iMouse;               // 鼠标位置: xy=当前位置, zw=点击位置
 uniform vec4      iDate;                // 年/月/日/秒
 uniform float     iSampleRate;          // 音频采样率
+uniform sampler2D iChannel0;            // 输入通道 0
+uniform sampler2D iChannel1;            // 输入通道 1
+uniform sampler2D iChannel2;            // 输入通道 2
+uniform sampler2D iChannel3;            // 输入通道 3
+uniform vec3      iChannelResolution[4]; // 各通道分辨率
 
 out vec4 _fragColor_out;
 
