@@ -226,8 +226,14 @@ int main(int argc, char* argv[]) {
             config.wallpaperMode = false;
         } else {
             window = wallpaperWindows[0].window;
-            config.width = wallpaperWindows[0].width;
-            config.height = wallpaperWindows[0].height;
+            // 取所有显示器的最大宽高，用于 FBO 预分配（避免多显示器不同分辨率时反复重建）
+            int maxW = 0, maxH = 0;
+            for (const auto& ww : wallpaperWindows) {
+                if (ww.width > maxW) maxW = ww.width;
+                if (ww.height > maxH) maxH = ww.height;
+            }
+            config.width = maxW;
+            config.height = maxH;
         }
     }
 
@@ -272,8 +278,9 @@ int main(int argc, char* argv[]) {
         config.renderScale = config.wallpaperMode ? 0.5f : 1.0f;
     }
 
-    // VSync 策略：统一开启 VSync（防撕裂 + GPU 帧间休息降功耗），配合 SDL_Delay 兜底控帧
-    SDL_GL_SetSwapInterval(1);
+    // VSync 策略：关闭 VSync，纯靠 SDL_Delay 精确控帧
+    // （VSync 在 WorkerW 嵌入窗口和部分驱动下行为不可靠）
+    SDL_GL_SetSwapInterval(0);
 
     std::cout << "Target FPS: " << config.targetFPS
               << ", Render scale: " << config.renderScale << std::endl;
@@ -532,6 +539,11 @@ int main(int argc, char* argv[]) {
     int frameCount = 0;
     Uint32 fullscreenCheckTimer = 0;  // 全屏检测计时
     bool autoPaused = false;          // 因全屏应用而自动暂停
+
+    // FPS 统计（帧计数法，每秒更新一次，比 1/timeDelta 更准确）
+    float measuredFPS = 0.0f;
+    int fpsFrameCount = 0;
+    Uint64 fpsLastTime = SDL_GetPerformanceCounter();
 
     // 帧率自适应
     float adaptiveFPS = static_cast<float>(config.targetFPS);
@@ -868,22 +880,17 @@ int main(int argc, char* argv[]) {
                     localMouse[3] = 0.0f;
                 }
 
+                Uint64 renderStart = SDL_GetPerformanceCounter();
+
                 if (useScaledRender) {
-                    // 降分辨率渲染到 FBO
-                    int scaledW = static_cast<int>(ww.width * config.renderScale);
-                    int scaledH = static_cast<int>(ww.height * config.renderScale);
-                    if (scaledW != renderWidth || scaledH != renderHeight) {
-                        CreateRenderFBO(ww.width, ww.height);
-                    }
+                    // 降分辨率渲染到 FBO（FBO 已按最大显示器尺寸预分配，无需重建）
+                    int curRenderW = static_cast<int>(ww.width * config.renderScale);
+                    int curRenderH = static_cast<int>(ww.height * config.renderScale);
+                    if (curRenderW < 1) curRenderW = 1;
+                    if (curRenderH < 1) curRenderH = 1;
 
                     glBindFramebuffer(GL_FRAMEBUFFER, renderFBO);
-                    renderer.SetViewport(renderWidth, renderHeight);
-
-                    // iResolution 设为缩放后的分辨率
-                    shader.Use();
-                    glUniform3f(shader.GetUniformLocation("iResolution"),
-                                static_cast<float>(renderWidth),
-                                static_cast<float>(renderHeight), 1.0f);
+                    renderer.SetViewport(curRenderW, curRenderH);
 
                     // 鼠标坐标也按比例缩放
                     float scaledMouse[4] = {
@@ -908,24 +915,16 @@ int main(int argc, char* argv[]) {
                     glBindVertexArray(0);
                 } else {
                     renderer.SetViewport(ww.width, ww.height);
-
-                    // 设置每个窗口独立的 iResolution
-                    shader.Use();
-                    glUniform3f(shader.GetUniformLocation("iResolution"),
-                                static_cast<float>(ww.width),
-                                static_cast<float>(ww.height), 1.0f);
-
                     renderer.RenderFrame(shader, currentTime, timeDelta, frameCount,
                                         localMouse, date);
                 }
 
                 // 壁纸模式 Debug 叠加
                 if (config.showDebug) {
-                    Uint64 renderEnd = SDL_GetPerformanceCounter();
-                    float renderElapsed = static_cast<float>(renderEnd - now) / static_cast<float>(freq);
-                    float curFps = (timeDelta > 0.0f) ? (1.0f / timeDelta) : 0.0f;
+                    Uint64 preSwap = SDL_GetPerformanceCounter();
+                    float renderElapsed = static_cast<float>(preSwap - renderStart) / static_cast<float>(freq);
 
-                    fillDebugState(curFps, currentTime, timeDelta, renderElapsed,
+                    fillDebugState(measuredFPS, currentTime, timeDelta, renderElapsed,
                                    static_cast<float>(ww.width),
                                    static_cast<float>(ww.height), localMouse);
 
@@ -937,6 +936,8 @@ int main(int argc, char* argv[]) {
             }
         } else {
             // 窗口模式
+            Uint64 renderStart = SDL_GetPerformanceCounter();
+
             if (useScaledRender) {
                 int scaledW = static_cast<int>(config.width * config.renderScale);
                 int scaledH = static_cast<int>(config.height * config.renderScale);
@@ -966,10 +967,9 @@ int main(int argc, char* argv[]) {
             // DebugUI 渲染（在 shader 渲染后、SwapWindow 前）
             {
                 Uint64 renderEnd = SDL_GetPerformanceCounter();
-                float renderElapsed = static_cast<float>(renderEnd - now) / static_cast<float>(freq);
-                float curFps = (timeDelta > 0.0f) ? (1.0f / timeDelta) : 0.0f;
+                float renderElapsed = static_cast<float>(renderEnd - renderStart) / static_cast<float>(freq);
 
-                fillDebugState(curFps, currentTime, timeDelta, renderElapsed,
+                fillDebugState(measuredFPS, currentTime, timeDelta, renderElapsed,
                                static_cast<float>(config.width),
                                static_cast<float>(config.height), mouse);
 
@@ -981,22 +981,31 @@ int main(int argc, char* argv[]) {
         }
         frameCount++;
 
+        // FPS 帧计数统计（每秒更新一次）
+        fpsFrameCount++;
+        Uint64 fpsNow = SDL_GetPerformanceCounter();
+        float fpsElapsed = static_cast<float>(fpsNow - fpsLastTime) / static_cast<float>(freq);
+        if (fpsElapsed >= 1.0f) {
+            measuredFPS = static_cast<float>(fpsFrameCount) / fpsElapsed;
+            fpsFrameCount = 0;
+            fpsLastTime = fpsNow;
+        }
+
         // 帧率自适应 + 帧率控制
         if (config.targetFPS > 0) {
-            // 测量当前帧实际渲染耗时（从帧开始到渲染完成）
             Uint64 frameEnd = SDL_GetPerformanceCounter();
             float frameElapsed = static_cast<float>(frameEnd - now) / static_cast<float>(freq);
 
-            // 统计平均帧渲染耗时（每60帧调整一次）
+            // 统计平均帧耗时（每60帧调整一次）
             frameTimeAccum += frameElapsed;
             frameTimeCount++;
             if (frameTimeCount >= 60) {
                 float avgFrameTime = frameTimeAccum / static_cast<float>(frameTimeCount);
                 float maxFrameTime = 1.0f / static_cast<float>(config.targetFPS);
 
-                if (avgFrameTime > maxFrameTime * 1.5f && adaptiveFPS > 15.0f) {
+                if (avgFrameTime > maxFrameTime * 1.5f && adaptiveFPS > 1.0f) {
                     // GPU 负载过高，降低帧率
-                    adaptiveFPS = std::max(15.0f, adaptiveFPS * 0.8f);
+                    adaptiveFPS = std::max(1.0f, adaptiveFPS * 0.8f);
                     std::cout << "Adaptive FPS: lowered to " << static_cast<int>(adaptiveFPS) << std::endl;
                 } else if (avgFrameTime < maxFrameTime * 0.7f && adaptiveFPS < static_cast<float>(config.targetFPS)) {
                     // GPU 负载轻松，恢复帧率
@@ -1006,6 +1015,7 @@ int main(int argc, char* argv[]) {
                 frameTimeCount = 0;
             }
 
+            // 帧率控制：用总耗时（含 VSync）来补足剩余等待
             float targetFrameTime = 1.0f / adaptiveFPS;
             if (frameElapsed < targetFrameTime) {
                 SDL_Delay(static_cast<Uint32>((targetFrameTime - frameElapsed) * 1000.0f));

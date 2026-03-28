@@ -141,7 +141,7 @@ void DebugUI::Render(DebugUIState& state) {
             }
 
             // FPS 滑条
-            ImGui::SliderInt("Target FPS", &state.targetFPS, 15, 120);
+            ImGui::SliderInt("Target FPS", &state.targetFPS, 1, 120);
 
             // RenderScale 滑条
             ImGui::SliderFloat("Render Scale", &state.renderScale, 0.1f, 1.0f, "%.2f");
