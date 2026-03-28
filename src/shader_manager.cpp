@@ -23,8 +23,10 @@ ShaderManager::ShaderManager(ShaderManager&& other) noexcept
     : program_(other.program_), lastError_(std::move(other.lastError_)),
       commonSource_(std::move(other.commonSource_)),
       isCubeMapPass_(other.isCubeMapPass_),
-      channelTypes_(other.channelTypes_) {
+      channelTypes_(other.channelTypes_),
+      uniforms_(other.uniforms_) {
     other.program_ = 0;
+    other.uniforms_ = {};
 }
 
 ShaderManager& ShaderManager::operator=(ShaderManager&& other) noexcept {
@@ -35,7 +37,9 @@ ShaderManager& ShaderManager::operator=(ShaderManager&& other) noexcept {
         commonSource_ = std::move(other.commonSource_);
         isCubeMapPass_ = other.isCubeMapPass_;
         channelTypes_ = other.channelTypes_;
+        uniforms_ = other.uniforms_;
         other.program_ = 0;
+        other.uniforms_ = {};
     }
     return *this;
 }
@@ -89,6 +93,9 @@ bool ShaderManager::LoadFromSource(const std::string& shaderToySource) {
     // 链接成功后 shader 对象可以删除
     glDeleteShader(vertShader);
     glDeleteShader(fragShader);
+
+    // 缓存所有 uniform location
+    CacheUniformLocations();
     return true;
 }
 
@@ -237,4 +244,30 @@ void ShaderManager::Cleanup() {
         glDeleteProgram(program_);
         program_ = 0;
     }
+    uniforms_ = {};
+}
+
+void ShaderManager::CacheUniformLocations() {
+    if (!program_) return;
+
+    uniforms_.iResolution = glGetUniformLocation(program_, "iResolution");
+    uniforms_.iTime = glGetUniformLocation(program_, "iTime");
+    uniforms_.iTimeDelta = glGetUniformLocation(program_, "iTimeDelta");
+    uniforms_.iFrame = glGetUniformLocation(program_, "iFrame");
+    uniforms_.iMouse = glGetUniformLocation(program_, "iMouse");
+    uniforms_.iDate = glGetUniformLocation(program_, "iDate");
+    uniforms_.iSampleRate = glGetUniformLocation(program_, "iSampleRate");
+    uniforms_.iFrameRate = glGetUniformLocation(program_, "iFrameRate");
+    uniforms_.iChannelTime = glGetUniformLocation(program_, "iChannelTime");
+    uniforms_.iChannelResolution = glGetUniformLocation(program_, "iChannelResolution");
+    uniforms_.iClickTime = glGetUniformLocation(program_, "iClickTime");
+
+    uniforms_.iChannel[0] = glGetUniformLocation(program_, "iChannel0");
+    uniforms_.iChannel[1] = glGetUniformLocation(program_, "iChannel1");
+    uniforms_.iChannel[2] = glGetUniformLocation(program_, "iChannel2");
+    uniforms_.iChannel[3] = glGetUniformLocation(program_, "iChannel3");
+
+    uniforms_.cubeFaceRight = glGetUniformLocation(program_, "_cubeFaceRight");
+    uniforms_.cubeFaceUp = glGetUniformLocation(program_, "_cubeFaceUp");
+    uniforms_.cubeFaceDir = glGetUniformLocation(program_, "_cubeFaceDir");
 }

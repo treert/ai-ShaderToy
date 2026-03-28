@@ -12,6 +12,26 @@ enum class ChannelType {
     Texture3D,  // sampler3D（体积纹理）
 };
 
+/// 缓存所有 ShaderToy uniform 的 location，避免每帧调用 glGetUniformLocation
+struct UniformLocations {
+    GLint iResolution = -1;
+    GLint iTime = -1;
+    GLint iTimeDelta = -1;
+    GLint iFrame = -1;
+    GLint iMouse = -1;
+    GLint iDate = -1;
+    GLint iSampleRate = -1;
+    GLint iFrameRate = -1;
+    GLint iChannelTime = -1;
+    GLint iChannelResolution = -1;
+    GLint iClickTime = -1;
+    GLint iChannel[4] = {-1, -1, -1, -1};
+    // CubeMap pass 专用
+    GLint cubeFaceRight = -1;
+    GLint cubeFaceUp = -1;
+    GLint cubeFaceDir = -1;
+};
+
 /// ShaderManager 负责加载、编译和管理 ShaderToy 兼容的着色器。
 /// 它将 ShaderToy 的 mainImage 函数包装成标准的 OpenGL Fragment Shader。
 class ShaderManager {
@@ -46,8 +66,11 @@ public:
     /// 获取 OpenGL program ID
     GLuint GetProgram() const { return program_; }
 
-    /// 获取 uniform location
+    /// 获取 uniform location（通用，走 glGetUniformLocation）
     GLint GetUniformLocation(const char* name) const;
+
+    /// 获取缓存的 uniform locations（编译后自动缓存，避免每帧查询）
+    const UniformLocations& GetCachedLocations() const { return uniforms_; }
 
     /// 获取最近的编译/链接错误信息
     const std::string& GetLastError() const { return lastError_; }
@@ -56,6 +79,8 @@ public:
     const std::array<ChannelType, 4>& GetChannelTypes() const { return channelTypes_; }
 
 private:
+    /// 编译链接成功后缓存所有 uniform location
+    void CacheUniformLocations();
     /// 将 ShaderToy 着色器源码包装成完整的 Fragment Shader
     std::string WrapShaderToySource(const std::string& source) const;
 
@@ -76,6 +101,7 @@ private:
         ChannelType::Texture2D, ChannelType::Texture2D,
         ChannelType::Texture2D, ChannelType::Texture2D
     };
+    UniformLocations uniforms_;  // 缓存的 uniform locations
 
     // 全屏四边形的顶点着色器（固定）
     static const char* kVertexShaderSource;

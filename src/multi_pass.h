@@ -108,10 +108,20 @@ public:
     /// 设置 Image pass 的目标 FBO（0=默认帧缓冲即屏幕，非0=降分辨率渲染用 FBO）
     void SetImageTargetFBO(GLuint fbo);
 
-    /// 渲染所有 pass
+    /// 渲染所有 pass（完整流程，窗口模式使用）
     /// @param quadVAO 全屏四边形 VAO
     /// @param clickTime 最近点击时间（自定义 uniform iClickTime）
     void RenderAllPasses(GLuint quadVAO, float time, float timeDelta,
+                         int frame, const float mouse[4], const float date[4],
+                         int viewportW, int viewportH, float clickTime = -10.0f);
+
+    /// 仅渲染 Buffer pass + CubeMap pass + 交换双缓冲（壁纸模式：只需调用一次）
+    void RenderBufferPasses(GLuint quadVAO, float time, float timeDelta,
+                            int frame, const float mouse[4], const float date[4],
+                            int viewportW, int viewportH, float clickTime = -10.0f);
+
+    /// 仅渲染 Image pass（壁纸模式：每个显示器各调用一次）
+    void RenderImagePass(GLuint quadVAO, float time, float timeDelta,
                          int frame, const float mouse[4], const float date[4],
                          int viewportW, int viewportH, float clickTime = -10.0f);
 

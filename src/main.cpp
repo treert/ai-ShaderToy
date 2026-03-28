@@ -7,6 +7,7 @@
 #include <mutex>
 #include <algorithm>
 #include <array>
+#include <memory>
 #include <filesystem>
 
 #include <glad/glad.h>
@@ -161,6 +162,8 @@ int main(int argc, char* argv[]) {
         SDL_Window* window = nullptr;
         int x = 0, y = 0;          // 显示器屏幕坐标
         int width = 0, height = 0;
+        bool occluded = false;      // 是否被窗口遮挡（遮挡时跳过渲染）
+        std::unique_ptr<BlitRenderer> blit; // 每个显示器独立的 BlitRenderer（不同分辨率各自持有 FBO）
     };
     std::vector<WallpaperWindow> wallpaperWindows;
     SDL_Window* window = nullptr;       // 主窗口（窗口模式用，壁纸模式指向第一个）
@@ -220,7 +223,7 @@ int main(int argc, char* argv[]) {
             ww.y = mon.y;
             ww.width = mon.width;
             ww.height = mon.height;
-            wallpaperWindows.push_back(ww);
+            wallpaperWindows.push_back(std::move(ww));
         }
 
         if (wallpaperWindows.empty()) {
@@ -290,18 +293,38 @@ int main(int argc, char* argv[]) {
     // ============================================================
     // 降分辨率渲染（renderScale < 1.0 时启用）
     // ============================================================
-    BlitRenderer blitRenderer;
+    BlitRenderer blitRenderer;  // 窗口模式使用
     bool useScaledRender = (config.renderScale < 1.0f);
 
     if (useScaledRender) {
-        if (!blitRenderer.Init()) {
-            std::cerr << "BlitRenderer init failed, disabling scaled rendering." << std::endl;
-            useScaledRender = false;
+        if (config.wallpaperMode && !wallpaperWindows.empty()) {
+            // 壁纸模式：每个显示器创建独立的 BlitRenderer
+            for (auto& ww : wallpaperWindows) {
+                ww.blit = std::make_unique<BlitRenderer>();
+                if (!ww.blit->Init()) {
+                    std::cerr << "BlitRenderer init failed for monitor (" << ww.x << "," << ww.y << ")" << std::endl;
+                    useScaledRender = false;
+                    break;
+                }
+                ww.blit->CreateRenderFBO(ww.width, ww.height, config.renderScale);
+                std::cout << "Monitor (" << ww.x << "," << ww.y << ") scaled rendering: "
+                          << ww.blit->GetRenderWidth() << "x" << ww.blit->GetRenderHeight()
+                          << " (scale=" << config.renderScale << ")" << std::endl;
+            }
+            if (!useScaledRender) {
+                for (auto& ww : wallpaperWindows) ww.blit.reset();
+            }
         } else {
-            blitRenderer.CreateRenderFBO(config.width, config.height, config.renderScale);
-            std::cout << "Scaled rendering: " << blitRenderer.GetRenderWidth() << "x"
-                      << blitRenderer.GetRenderHeight()
-                      << " (scale=" << config.renderScale << ")" << std::endl;
+            // 窗口模式：使用全局 blitRenderer
+            if (!blitRenderer.Init()) {
+                std::cerr << "BlitRenderer init failed, disabling scaled rendering." << std::endl;
+                useScaledRender = false;
+            } else {
+                blitRenderer.CreateRenderFBO(config.width, config.height, config.renderScale);
+                std::cout << "Scaled rendering: " << blitRenderer.GetRenderWidth() << "x"
+                          << blitRenderer.GetRenderHeight()
+                          << " (scale=" << config.renderScale << ")" << std::endl;
+            }
         }
     }
 
@@ -475,7 +498,8 @@ int main(int argc, char* argv[]) {
         }
 
         // 降分辨率模式：Image pass 渲染到 blitRenderer 的 FBO
-        if (useScaledRender && blitRenderer.GetRenderFBO()) {
+        // 壁纸模式下每个显示器有独立 FBO，在渲染循环中动态设置
+        if (useScaledRender && !config.wallpaperMode && blitRenderer.GetRenderFBO()) {
             multiPass.SetImageTargetFBO(blitRenderer.GetRenderFBO());
             multiPass.Resize(blitRenderer.GetRenderWidth(), blitRenderer.GetRenderHeight());
         }
@@ -591,25 +615,85 @@ int main(int argc, char* argv[]) {
     }
 
     // ============================================================
-    // 全屏应用检测辅助函数
+    // 桌面遮挡检测辅助函数（壁纸模式用）
     // ============================================================
 #ifdef _WIN32
+    // 检查指定显示器区域是否被单个窗口几乎完全覆盖（如最大化窗口）
+    // 策略：只要有一个非桌面窗口覆盖了该显示器 >= 90% 面积，就视为遮挡
+    // 不累加多窗口面积（避免重叠区域重复计算导致误判）
+    auto IsMonitorOccluded = [](int monX, int monY, int monW, int monH) -> bool {
+        RECT monRect = {monX, monY, monX + monW, monY + monH};
+        long monArea = (long)monW * monH;
+        if (monArea <= 0) return false;
+
+        // 枚举从前到后的顶层窗口
+        HWND hwnd = GetTopWindow(nullptr);
+        while (hwnd) {
+            // 跳过不可见窗口
+            if (!IsWindowVisible(hwnd)) {
+                hwnd = GetNextWindow(hwnd, GW_HWNDNEXT);
+                continue;
+            }
+
+            // 跳过桌面相关窗口
+            wchar_t className[64] = {};
+            GetClassNameW(hwnd, className, 64);
+            if (wcscmp(className, L"Progman") == 0 || wcscmp(className, L"WorkerW") == 0 ||
+                wcscmp(className, L"Shell_TrayWnd") == 0 || wcscmp(className, L"Shell_SecondaryTrayWnd") == 0) {
+                hwnd = GetNextWindow(hwnd, GW_HWNDNEXT);
+                continue;
+            }
+
+            // 跳过最小化窗口
+            if (IsIconic(hwnd)) {
+                hwnd = GetNextWindow(hwnd, GW_HWNDNEXT);
+                continue;
+            }
+
+            // 跳过无标题且零面积的隐藏辅助窗口
+            RECT wndRect;
+            if (!GetWindowRect(hwnd, &wndRect)) {
+                hwnd = GetNextWindow(hwnd, GW_HWNDNEXT);
+                continue;
+            }
+            if (wndRect.right <= wndRect.left || wndRect.bottom <= wndRect.top) {
+                hwnd = GetNextWindow(hwnd, GW_HWNDNEXT);
+                continue;
+            }
+
+            // 计算单个窗口与显示器的交集面积
+            RECT inter;
+            if (IntersectRect(&inter, &wndRect, &monRect)) {
+                long iw = inter.right - inter.left;
+                long ih = inter.bottom - inter.top;
+                if (iw > 0 && ih > 0) {
+                    long singleCover = iw * ih;
+                    // 单个窗口覆盖 >= 90% 显示器面积，视为遮挡
+                    if (singleCover >= monArea * 90 / 100) {
+                        return true;
+                    }
+                }
+            }
+
+            hwnd = GetNextWindow(hwnd, GW_HWNDNEXT);
+        }
+
+        return false;
+    };
+
     auto IsFullscreenAppRunning = []() -> bool {
         HWND fg = GetForegroundWindow();
         if (!fg) return false;
 
-        // 排除桌面和任务栏
         HWND desktop = GetDesktopWindow();
         HWND shell = GetShellWindow();
         if (fg == desktop || fg == shell) return false;
 
-        // 检查类名排除 Progman/WorkerW（桌面本身）
         wchar_t className[64] = {};
         GetClassNameW(fg, className, 64);
         if (wcscmp(className, L"Progman") == 0 || wcscmp(className, L"WorkerW") == 0)
             return false;
 
-        // 检查窗口是否覆盖了整个屏幕
         RECT wndRect;
         GetWindowRect(fg, &wndRect);
         int scrW = GetSystemMetrics(SM_CXSCREEN);
@@ -807,16 +891,37 @@ int main(int argc, char* argv[]) {
                 bool newScaled = (config.renderScale < 1.0f);
                 if (newScaled && !useScaledRender) {
                     useScaledRender = true;
-                    if (!blitRenderer.IsInitialized()) {
+                    if (config.wallpaperMode) {
+                        for (auto& ww : wallpaperWindows) {
+                            if (!ww.blit) {
+                                ww.blit = std::make_unique<BlitRenderer>();
+                                ww.blit->Init();
+                            }
+                        }
+                    } else if (!blitRenderer.IsInitialized()) {
                         blitRenderer.Init();
                     }
                 } else if (!newScaled) {
                     useScaledRender = false;
                 }
                 if (useScaledRender) {
-                    blitRenderer.CreateRenderFBO(config.width, config.height, config.renderScale);
-                    multiPass.SetImageTargetFBO(blitRenderer.GetRenderFBO());
-                    multiPass.Resize(blitRenderer.GetRenderWidth(), blitRenderer.GetRenderHeight());
+                    if (config.wallpaperMode) {
+                        for (auto& ww : wallpaperWindows) {
+                            if (ww.blit) {
+                                ww.blit->CreateRenderFBO(ww.width, ww.height, config.renderScale);
+                            }
+                        }
+                        // Buffer pass 用最大尺寸
+                        int bufW = static_cast<int>(config.width * config.renderScale);
+                        int bufH = static_cast<int>(config.height * config.renderScale);
+                        if (bufW < 1) bufW = 1;
+                        if (bufH < 1) bufH = 1;
+                        multiPass.Resize(bufW, bufH);
+                    } else {
+                        blitRenderer.CreateRenderFBO(config.width, config.height, config.renderScale);
+                        multiPass.SetImageTargetFBO(blitRenderer.GetRenderFBO());
+                        multiPass.Resize(blitRenderer.GetRenderWidth(), blitRenderer.GetRenderHeight());
+                    }
                 } else {
                     multiPass.SetImageTargetFBO(0);
                     multiPass.Resize(config.width, config.height);
@@ -929,7 +1034,39 @@ int main(int argc, char* argv[]) {
 
         // 渲染
         if (config.wallpaperMode && !wallpaperWindows.empty()) {
-            // 壁纸模式：依次渲染每个显示器窗口，鼠标坐标转局部
+            // 壁纸模式优化：Buffer pass 只渲染一次，Image pass 对每个显示器分别渲染
+            // Buffer pass 使用最大显示器的降分辨率尺寸（config.width/height 已是 maxW/maxH）
+            SDL_GL_MakeCurrent(wallpaperWindows[0].window, glContext);
+
+            Uint64 renderStart = SDL_GetPerformanceCounter();  // 计时包含 Buffer + Image pass
+
+            int bufferW, bufferH;
+            if (useScaledRender) {
+                bufferW = static_cast<int>(config.width * config.renderScale);
+                bufferH = static_cast<int>(config.height * config.renderScale);
+                if (bufferW < 1) bufferW = 1;
+                if (bufferH < 1) bufferH = 1;
+            } else {
+                bufferW = config.width;
+                bufferH = config.height;
+            }
+
+            // 使用第一个显示器的鼠标局部坐标传给 Buffer pass（Buffer 内容与显示器无关，鼠标影响不大）
+            float bufferMouse[4] = {mouse[0], mouse[1], mouse[2], mouse[3]};
+            if (useScaledRender) {
+                bufferMouse[0] *= config.renderScale;
+                bufferMouse[1] *= config.renderScale;
+                bufferMouse[2] *= config.renderScale;
+                bufferMouse[3] *= config.renderScale;
+            }
+
+            multiPass.RenderBufferPasses(quadVAO, currentTime, timeDelta, frameCount,
+                                         bufferMouse, date, bufferW, bufferH, clickTime);
+
+            Uint64 bufferEnd = SDL_GetPerformanceCounter();
+            float bufferTime = static_cast<float>(bufferEnd - renderStart) / static_cast<float>(freq);
+
+            // 每个显示器各渲染 Image pass + blit + debug + swap
             for (auto& ww : wallpaperWindows) {
                 SDL_GL_MakeCurrent(ww.window, glContext);
 
@@ -959,9 +1096,9 @@ int main(int argc, char* argv[]) {
                     localMouse[3] = 0.0f;
                 }
 
-                Uint64 renderStart = SDL_GetPerformanceCounter();
+                Uint64 imageStart = SDL_GetPerformanceCounter();
 
-                if (useScaledRender) {
+                if (useScaledRender && ww.blit) {
                     int curRenderW = static_cast<int>(ww.width * config.renderScale);
                     int curRenderH = static_cast<int>(ww.height * config.renderScale);
                     if (curRenderW < 1) curRenderW = 1;
@@ -974,22 +1111,24 @@ int main(int argc, char* argv[]) {
                         localMouse[3] * config.renderScale
                     };
 
-                    multiPass.SetImageTargetFBO(blitRenderer.GetRenderFBO());
-                    multiPass.RenderAllPasses(quadVAO, currentTime, timeDelta, frameCount,
+                    multiPass.SetImageTargetFBO(ww.blit->GetRenderFBO());
+                    multiPass.RenderImagePass(quadVAO, currentTime, timeDelta, frameCount,
                                              scaledMouse, date, curRenderW, curRenderH, clickTime);
 
-                    blitRenderer.BlitToScreen(ww.width, ww.height);
+                    ww.blit->BlitToScreen(ww.width, ww.height);
                 } else {
                     multiPass.SetImageTargetFBO(0);
-                    multiPass.RenderAllPasses(quadVAO, currentTime, timeDelta, frameCount,
+                    multiPass.RenderImagePass(quadVAO, currentTime, timeDelta, frameCount,
                                              localMouse, date, ww.width, ww.height, clickTime);
                 }
 
-                // 壁纸模式 Debug 叠加
-                if (config.showDebug) {
-                    Uint64 preSwap = SDL_GetPerformanceCounter();
-                    float renderElapsed = static_cast<float>(preSwap - renderStart) / static_cast<float>(freq);
+                Uint64 imageEnd = SDL_GetPerformanceCounter();
+                float imageTime = static_cast<float>(imageEnd - imageStart) / static_cast<float>(freq);
 
+                // renderTime = Buffer pass 共享时间 + 当前显示器 Image pass 时间
+                float renderElapsed = bufferTime + imageTime;
+
+                if (config.showDebug) {
                     fillDebugState(measuredFPS, currentTime, timeDelta, renderElapsed,
                                    static_cast<float>(ww.width),
                                    static_cast<float>(ww.height), localMouse);

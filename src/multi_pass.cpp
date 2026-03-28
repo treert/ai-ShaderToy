@@ -149,7 +149,7 @@ bool MultiPassRenderer::CreateCubeMapFBO(RenderPass& pass, int cubeSize) {
     for (int t = 0; t < 2; ++t) {
         glBindTexture(GL_TEXTURE_CUBE_MAP, textures[t]);
         for (int face = 0; face < 6; ++face) {
-            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, GL_RGBA32F,
+            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, GL_RGBA16F,
                          cubeSize, cubeSize, 0, GL_RGBA, GL_FLOAT, nullptr);
         }
         glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -193,6 +193,13 @@ void MultiPassRenderer::SetImageTargetFBO(GLuint fbo) {
 void MultiPassRenderer::RenderAllPasses(GLuint quadVAO, float time, float timeDelta,
                                         int frame, const float mouse[4], const float date[4],
                                         int viewportW, int viewportH, float clickTime) {
+    RenderBufferPasses(quadVAO, time, timeDelta, frame, mouse, date, viewportW, viewportH, clickTime);
+    RenderImagePass(quadVAO, time, timeDelta, frame, mouse, date, viewportW, viewportH, clickTime);
+}
+
+void MultiPassRenderer::RenderBufferPasses(GLuint quadVAO, float time, float timeDelta,
+                                           int frame, const float mouse[4], const float date[4],
+                                           int viewportW, int viewportH, float clickTime) {
     // 0. 渲染 CubeMap pass（在 Buffer passes 之前，因为 Buffer 可能采样 cubemap）
     if (hasCubeMapPass_) {
         RenderCubeMapPass(cubeMapPass_, quadVAO, time, timeDelta, frame,
@@ -207,8 +214,12 @@ void MultiPassRenderer::RenderAllPasses(GLuint quadVAO, float time, float timeDe
 
     // 2. 交换 buffer 双缓冲
     SwapBuffers();
+}
 
-    // 3. 渲染 Image pass（输出到屏幕或降分辨率 FBO）
+void MultiPassRenderer::RenderImagePass(GLuint quadVAO, float time, float timeDelta,
+                                        int frame, const float mouse[4], const float date[4],
+                                        int viewportW, int viewportH, float clickTime) {
+    // 渲染 Image pass（输出到屏幕或降分辨率 FBO）
     RenderSinglePass(imagePass_, quadVAO, time, timeDelta, frame,
                     mouse, date, viewportW, viewportH, clickTime);
 }
@@ -328,6 +339,9 @@ void MultiPassRenderer::RenderSinglePass(RenderPass& pass, GLuint quadVAO,
 
     pass.shader.Use();
 
+    // 使用缓存的 uniform locations
+    const auto& loc = pass.shader.GetCachedLocations();
+
     // 设置 uniform
     float resW, resH;
     if (pass.fbo && pass.width > 0 && pass.height > 0) {
@@ -337,20 +351,18 @@ void MultiPassRenderer::RenderSinglePass(RenderPass& pass, GLuint quadVAO,
         resW = static_cast<float>(viewportW);
         resH = static_cast<float>(viewportH);
     }
-    glUniform3f(pass.shader.GetUniformLocation("iResolution"), resW, resH, 1.0f);
-    glUniform1f(pass.shader.GetUniformLocation("iTime"), time);
-    glUniform1f(pass.shader.GetUniformLocation("iTimeDelta"), timeDelta);
-    glUniform1i(pass.shader.GetUniformLocation("iFrame"), frame);
-    glUniform4f(pass.shader.GetUniformLocation("iMouse"),
-                mouse[0], mouse[1], mouse[2], mouse[3]);
-    glUniform4f(pass.shader.GetUniformLocation("iDate"),
-                date[0], date[1], date[2], date[3]);
-    glUniform1f(pass.shader.GetUniformLocation("iSampleRate"), 44100.0f);
+    glUniform3f(loc.iResolution, resW, resH, 1.0f);
+    glUniform1f(loc.iTime, time);
+    glUniform1f(loc.iTimeDelta, timeDelta);
+    glUniform1i(loc.iFrame, frame);
+    glUniform4f(loc.iMouse, mouse[0], mouse[1], mouse[2], mouse[3]);
+    glUniform4f(loc.iDate, date[0], date[1], date[2], date[3]);
+    glUniform1f(loc.iSampleRate, 44100.0f);
     float frameRate = (timeDelta > 0.0f) ? (1.0f / timeDelta) : 60.0f;
-    glUniform1f(pass.shader.GetUniformLocation("iFrameRate"), frameRate);
+    glUniform1f(loc.iFrameRate, frameRate);
     float channelTime[4] = {time, time, time, time};
-    glUniform1fv(pass.shader.GetUniformLocation("iChannelTime"), 4, channelTime);
-    glUniform1f(pass.shader.GetUniformLocation("iClickTime"), clickTime);
+    glUniform1fv(loc.iChannelTime, 4, channelTime);
+    glUniform1f(loc.iClickTime, clickTime);
 
     // 设置 iChannelResolution 和绑定输入纹理到 iChannel0~3
     float channelRes[4][3] = {};
@@ -388,11 +400,9 @@ void MultiPassRenderer::RenderSinglePass(RenderPass& pass, GLuint quadVAO,
             glBindTexture(GL_TEXTURE_2D, 0);
         }
 
-        char uniformName[16];
-        snprintf(uniformName, sizeof(uniformName), "iChannel%d", i);
-        glUniform1i(pass.shader.GetUniformLocation(uniformName), i);
+        glUniform1i(loc.iChannel[i], i);
     }
-    glUniform3fv(pass.shader.GetUniformLocation("iChannelResolution"), 4, &channelRes[0][0]);
+    glUniform3fv(loc.iChannelResolution, 4, &channelRes[0][0]);
 
     // 绘制全屏四边形
     glBindVertexArray(quadVAO);
@@ -455,23 +465,24 @@ void MultiPassRenderer::RenderCubeMapPass(RenderPass& pass, GLuint quadVAO,
 
     pass.shader.Use();
 
+    // 使用缓存的 uniform locations
+    const auto& loc = pass.shader.GetCachedLocations();
+
     // 设置通用 uniform
     float resW = static_cast<float>(pass.width);
     float resH = static_cast<float>(pass.height);
-    glUniform3f(pass.shader.GetUniformLocation("iResolution"), resW, resH, 1.0f);
-    glUniform1f(pass.shader.GetUniformLocation("iTime"), time);
-    glUniform1f(pass.shader.GetUniformLocation("iTimeDelta"), timeDelta);
-    glUniform1i(pass.shader.GetUniformLocation("iFrame"), frame);
-    glUniform4f(pass.shader.GetUniformLocation("iMouse"),
-                mouse[0], mouse[1], mouse[2], mouse[3]);
-    glUniform4f(pass.shader.GetUniformLocation("iDate"),
-                date[0], date[1], date[2], date[3]);
-    glUniform1f(pass.shader.GetUniformLocation("iSampleRate"), 44100.0f);
+    glUniform3f(loc.iResolution, resW, resH, 1.0f);
+    glUniform1f(loc.iTime, time);
+    glUniform1f(loc.iTimeDelta, timeDelta);
+    glUniform1i(loc.iFrame, frame);
+    glUniform4f(loc.iMouse, mouse[0], mouse[1], mouse[2], mouse[3]);
+    glUniform4f(loc.iDate, date[0], date[1], date[2], date[3]);
+    glUniform1f(loc.iSampleRate, 44100.0f);
     float frameRate = (timeDelta > 0.0f) ? (1.0f / timeDelta) : 60.0f;
-    glUniform1f(pass.shader.GetUniformLocation("iFrameRate"), frameRate);
+    glUniform1f(loc.iFrameRate, frameRate);
     float channelTime[4] = {time, time, time, time};
-    glUniform1fv(pass.shader.GetUniformLocation("iChannelTime"), 4, channelTime);
-    glUniform1f(pass.shader.GetUniformLocation("iClickTime"), clickTime);
+    glUniform1fv(loc.iChannelTime, 4, channelTime);
+    glUniform1f(loc.iClickTime, clickTime);
 
     // 绑定输入纹理
     float channelRes[4][3] = {};
@@ -506,26 +517,20 @@ void MultiPassRenderer::RenderCubeMapPass(RenderPass& pass, GLuint quadVAO,
             glBindTexture(GL_TEXTURE_2D, 0);
         }
 
-        char uniformName[16];
-        snprintf(uniformName, sizeof(uniformName), "iChannel%d", i);
-        glUniform1i(pass.shader.GetUniformLocation(uniformName), i);
+        glUniform1i(loc.iChannel[i], i);
     }
-    glUniform3fv(pass.shader.GetUniformLocation("iChannelResolution"), 4, &channelRes[0][0]);
+    glUniform3fv(loc.iChannelResolution, 4, &channelRes[0][0]);
 
     // 渲染 6 个面
-    GLint rightLoc = pass.shader.GetUniformLocation("_cubeFaceRight");
-    GLint upLoc    = pass.shader.GetUniformLocation("_cubeFaceUp");
-    GLint dirLoc   = pass.shader.GetUniformLocation("_cubeFaceDir");
-
     for (int face = 0; face < 6; ++face) {
         glBindFramebuffer(GL_FRAMEBUFFER, pass.cubeFBO[face]);
         glViewport(0, 0, pass.width, pass.height);
         glClear(GL_COLOR_BUFFER_BIT);
 
         // 设置面方向 uniform
-        glUniform3fv(rightLoc, 1, faces[face].right);
-        glUniform3fv(upLoc,    1, faces[face].up);
-        glUniform3fv(dirLoc,   1, faces[face].dir);
+        glUniform3fv(loc.cubeFaceRight, 1, faces[face].right);
+        glUniform3fv(loc.cubeFaceUp,    1, faces[face].up);
+        glUniform3fv(loc.cubeFaceDir,   1, faces[face].dir);
 
         // 绘制全屏四边形
         glBindVertexArray(quadVAO);

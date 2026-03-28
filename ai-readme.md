@@ -66,3 +66,12 @@
 - [x] JSON input 解析重构（抽取 ParseInputBinding 辅助函数消除重复代码）
 - [x] json2dir.py 工具（tools/ 目录，JSON 转目录格式）
 - [x] Cube A (CubeMap) pass 支持（mainCubemap 包装、6面 FBO 渲染、双缓冲、samplerCube 输出）
+
+### 阶段 5：GPU 性能深度优化 ✅ 已完成
+- [x] FBO 纹理格式降级（GL_RGBA32F → GL_RGBA16F），显存带宽减半
+- [x] Uniform location 缓存（ShaderManager 编译后自动缓存，消除每帧 glGetUniformLocation 调用）
+- [x] 多显示器共享 Buffer pass（壁纸模式 Buffer pass 只渲染一次，Image pass 按显示器渲染）
+- [x] 桌面遮挡检测增强（按显示器粒度检测遮挡，被遮挡 ≥80% 面积的显示器跳过渲染）
+- [x] BlitRenderer uniform 缓存（uTex location Init 时一次性缓存）
+- [x] MultiPassRenderer 渲染流程拆分（RenderBufferPasses + RenderImagePass）
+- [x] Vulkan 迁移评估（结论：暂不迁移，ShaderToy 场景 GPU 瓶颈在 fragment shader 而非 API 开销）

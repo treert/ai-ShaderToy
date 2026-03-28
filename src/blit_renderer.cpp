@@ -76,6 +76,9 @@ bool BlitRenderer::Init() {
     glEnableVertexAttribArray(0);
     glBindVertexArray(0);
 
+    // 缓存 uniform location
+    uTexLocation_ = glGetUniformLocation(blitProgram_, "uTex");
+
     initialized_ = true;
     return true;
 }
@@ -128,7 +131,7 @@ void BlitRenderer::BlitToScreen(int viewportWidth, int viewportHeight) {
     glUseProgram(blitProgram_);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, renderTex_);
-    glUniform1i(glGetUniformLocation(blitProgram_, "uTex"), 0);
+    glUniform1i(uTexLocation_, 0);
     glBindVertexArray(blitVAO_);
     glDrawArrays(GL_TRIANGLES, 0, 6);
     glBindVertexArray(0);

@@ -46,6 +46,7 @@ private:
     GLuint blitProgram_ = 0;
     GLuint blitVAO_ = 0;
     GLuint blitVBO_ = 0;
+    GLint uTexLocation_ = -1;  // 缓存的 uTex uniform location
 
     // 降分辨率 FBO
     GLuint renderFBO_ = 0;
