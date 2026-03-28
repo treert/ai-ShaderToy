@@ -13,6 +13,11 @@
 #include <glad/glad.h>
 #include <SDL.h>
 
+#ifdef _WIN32
+#include <dwmapi.h>
+#pragma comment(lib, "dwmapi.lib")
+#endif
+
 #include "renderer.h"
 #include "shader_manager.h"
 #include "wallpaper.h"
@@ -48,6 +53,7 @@ struct AppConfig {
     int         targetFPS = -1;      // -1 表示未指定，壁纸模式默认30，窗口模式默认60
     float       renderScale = 0.0f;  // 渲染分辨率缩放，0=自动（壁纸模式0.5，窗口模式1.0）
     int         monitorIndex = -1;   // 壁纸模式：指定显示器索引，-1=所有显示器
+    bool        pauseOnFullscreen = true; // 壁纸模式：全屏应用遮挡时暂停渲染
 };
 
 /// 确保有控制台可以输出（WIN32 子系统默认没有控制台）
@@ -83,6 +89,7 @@ static void PrintUsage(const char* programName) {
               << "  --fps <n>            Target FPS (wallpaper default: 30, window default: 60)\n"
               << "  --renderscale <f>    Render resolution scale 0.0-1.0 (wallpaper default: 0.5, window default: 1.0)\n"
               << "  --debug              Show debug overlay in wallpaper mode (default: off)\n"
+              << "  --no-pause-on-fullscreen  Disable auto-pause when fullscreen app covers desktop\n"
               << "  --help, -h           Show this help\n";
 }
 
@@ -129,6 +136,8 @@ static AppConfig ParseArgs(int argc, char* argv[]) {
             if (config.renderScale > 1.0f) config.renderScale = 1.0f;
         } else if (arg == "--debug") {
             config.showDebug = true;
+        } else if (arg == "--no-pause-on-fullscreen") {
+            config.pauseOnFullscreen = false;
         } else if (arg == "--help" || arg == "-h") {
             PrintUsage(argv[0]);
             exit(0);
@@ -631,27 +640,42 @@ int main(int argc, char* argv[]) {
     // ============================================================
 #ifdef _WIN32
     // 检查指定显示器区域是否被单个窗口几乎完全覆盖（如最大化窗口）
-    // 策略：只要有一个非桌面窗口覆盖了该显示器 >= 90% 面积，就视为遮挡
-    // 不累加多窗口面积（避免重叠区域重复计算导致误判）
+    // 策略：只要有一个非桌面、非隐形窗口覆盖了该显示器 >= 90% 面积，就视为遮挡
     auto IsMonitorOccluded = [](int monX, int monY, int monW, int monH) -> bool {
         RECT monRect = {monX, monY, monX + monW, monY + monH};
         long monArea = (long)monW * monH;
         if (monArea <= 0) return false;
 
-        // 枚举从前到后的顶层窗口
         HWND hwnd = GetTopWindow(nullptr);
         while (hwnd) {
-            // 跳过不可见窗口
             if (!IsWindowVisible(hwnd)) {
                 hwnd = GetNextWindow(hwnd, GW_HWNDNEXT);
                 continue;
             }
 
+            // 跳过 DWM "cloaked" 窗口（Win10/11 UWP 隐形窗口，IsWindowVisible 返回 true 但实际不可见）
+            DWORD cloaked = 0;
+            if (SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked != 0) {
+                hwnd = GetNextWindow(hwnd, GW_HWNDNEXT);
+                continue;
+            }
+
             // 跳过桌面相关窗口
-            wchar_t className[64] = {};
-            GetClassNameW(hwnd, className, 64);
+            wchar_t className[256] = {};
+            GetClassNameW(hwnd, className, 256);
             if (wcscmp(className, L"Progman") == 0 || wcscmp(className, L"WorkerW") == 0 ||
                 wcscmp(className, L"Shell_TrayWnd") == 0 || wcscmp(className, L"Shell_SecondaryTrayWnd") == 0) {
+                hwnd = GetNextWindow(hwnd, GW_HWNDNEXT);
+                continue;
+            }
+
+            // 跳过已知的系统级透明/辅助窗口类
+            if (wcscmp(className, L"Windows.UI.Core.CoreWindow") == 0 ||
+                wcscmp(className, L"ApplicationFrameInputSinkWindow") == 0 ||
+                wcscmp(className, L"EdgeUiInputTopWndClass") == 0 ||
+                wcscmp(className, L"EdgeUiInputWndClass") == 0 ||
+                wcscmp(className, L"ForegroundStaging") == 0 ||
+                wcscmp(className, L"Shell_InputSwitchTopLevelWindow") == 0) {
                 hwnd = GetNextWindow(hwnd, GW_HWNDNEXT);
                 continue;
             }
@@ -662,7 +686,14 @@ int main(int argc, char* argv[]) {
                 continue;
             }
 
-            // 跳过无标题且零面积的隐藏辅助窗口
+            // 跳过无主工具窗口（WS_EX_TOOLWINDOW 且无所有者）——通常是系统辅助窗口
+            LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            if ((exStyle & WS_EX_TOOLWINDOW) && GetWindow(hwnd, GW_OWNER) == nullptr) {
+                hwnd = GetNextWindow(hwnd, GW_HWNDNEXT);
+                continue;
+            }
+
+            // 跳过零面积窗口
             RECT wndRect;
             if (!GetWindowRect(hwnd, &wndRect)) {
                 hwnd = GetNextWindow(hwnd, GW_HWNDNEXT);
@@ -680,7 +711,6 @@ int main(int argc, char* argv[]) {
                 long ih = inter.bottom - inter.top;
                 if (iw > 0 && ih > 0) {
                     long singleCover = iw * ih;
-                    // 单个窗口覆盖 >= 90% 显示器面积，视为遮挡
                     if (singleCover >= monArea * 90 / 100) {
                         return true;
                     }
@@ -995,9 +1025,9 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
-        // 壁纸模式：每秒检测一次全屏应用
+        // 壁纸模式：每秒检测一次全屏应用和显示器遮挡
 #ifdef _WIN32
-        if (config.wallpaperMode) {
+        if (config.wallpaperMode && config.pauseOnFullscreen) {
             Uint32 now_ms = SDL_GetTicks();
             if (now_ms - fullscreenCheckTimer > 1000) {
                 fullscreenCheckTimer = now_ms;
@@ -1008,6 +1038,17 @@ int main(int argc, char* argv[]) {
                 } else if (!fullscreen && autoPaused) {
                     autoPaused = false;
                     std::cout << "Fullscreen app closed, resuming." << std::endl;
+                }
+
+                // 按显示器粒度遮挡检测
+                for (size_t i = 0; i < wallpaperWindows.size(); ++i) {
+                    auto& ww = wallpaperWindows[i];
+                    bool wasOccluded = ww.occluded;
+                    ww.occluded = IsMonitorOccluded(ww.x, ww.y, ww.width, ww.height);
+                    if (ww.occluded != wasOccluded) {
+                        std::cout << "Monitor " << i << " (" << ww.width << "x" << ww.height
+                                  << ") occluded: " << (ww.occluded ? "yes" : "no") << std::endl;
+                    }
                 }
             }
             if (autoPaused) {
@@ -1051,6 +1092,16 @@ int main(int argc, char* argv[]) {
         if (config.wallpaperMode && !wallpaperWindows.empty()) {
             // 壁纸模式优化：Buffer pass 只渲染一次，Image pass 对每个显示器分别渲染
             // Buffer pass 使用最大显示器的降分辨率尺寸（config.width/height 已是 maxW/maxH）
+
+            // 检查是否所有显示器都被遮挡，是则跳过整帧（含 Buffer pass）
+            bool allOccluded = config.pauseOnFullscreen &&
+                std::all_of(wallpaperWindows.begin(), wallpaperWindows.end(),
+                            [](const WallpaperWindow& ww) { return ww.occluded; });
+            if (allOccluded) {
+                SDL_Delay(100);
+                continue;
+            }
+
             SDL_GL_MakeCurrent(wallpaperWindows[0].window, glContext);
 
             Uint64 renderStart = SDL_GetPerformanceCounter();  // 计时包含 Buffer + Image pass
@@ -1084,6 +1135,11 @@ int main(int argc, char* argv[]) {
 
             // 每个显示器各渲染 Image pass + blit + debug + swap
             for (auto& ww : wallpaperWindows) {
+                // 被遮挡的显示器跳过渲染
+                if (ww.occluded && config.pauseOnFullscreen) {
+                    continue;
+                }
+
                 SDL_GL_MakeCurrent(ww.window, glContext);
 
                 // 将全局屏幕坐标转为当前窗口的局部坐标（ShaderToy Y 从底部开始）

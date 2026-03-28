@@ -108,6 +108,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     glad
     opengl32
     nlohmann_json::nlohmann_json
+    dwmapi
 )
 
 # MSVC: 禁用 C4005（APIENTRY 宏重定义，GLAD 与 Windows SDK 冲突）
