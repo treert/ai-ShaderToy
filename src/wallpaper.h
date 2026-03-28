@@ -17,8 +17,14 @@ public:
     /// 恢复桌面（取消嵌入）
     static void Restore();
 
-    /// 获取桌面分辨率
+    /// 获取主显示器分辨率
     static void GetDesktopResolution(int& width, int& height);
+
+    /// 获取虚拟桌面分辨率（覆盖所有显示器）
+    static void GetVirtualDesktopResolution(int& width, int& height);
+
+    /// 获取虚拟桌面左上角偏移（多显示器时可能为负）
+    static void GetVirtualDesktopOffset(int& x, int& y);
 
 private:
 #ifdef _WIN32

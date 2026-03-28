@@ -48,6 +48,7 @@ void Renderer::RenderFrame(ShaderManager& shader, float time, float timeDelta,
                 mouse[0], mouse[1], mouse[2], mouse[3]);
     glUniform4f(shader.GetUniformLocation("iDate"),
                 date[0], date[1], date[2], date[3]);
+    glUniform1f(shader.GetUniformLocation("iSampleRate"), 44100.0f);
 
     // 绘制全屏四边形
     glBindVertexArray(vao_);

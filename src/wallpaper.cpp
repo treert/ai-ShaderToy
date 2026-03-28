@@ -65,12 +65,14 @@ bool Wallpaper::EmbedAsWallpaper(SDL_Window* window) {
     // 设置为 WorkerW 的子窗口
     SetParent(hwnd, workerW_);
 
-    // 获取桌面大小并调整窗口
-    int w, h;
-    GetDesktopResolution(w, h);
-    SetWindowPos(hwnd, nullptr, 0, 0, w, h, SWP_NOZORDER | SWP_SHOWWINDOW);
+    // 获取虚拟桌面大小（覆盖所有显示器）并调整窗口
+    int x, y, w, h;
+    GetVirtualDesktopOffset(x, y);
+    GetVirtualDesktopResolution(w, h);
+    SetWindowPos(hwnd, nullptr, x, y, w, h, SWP_NOZORDER | SWP_SHOWWINDOW);
 
-    std::cout << "Successfully embedded as wallpaper (" << w << "x" << h << ")" << std::endl;
+    std::cout << "Successfully embedded as wallpaper (" << w << "x" << h
+              << " at " << x << "," << y << ")" << std::endl;
     return true;
 }
 
@@ -88,6 +90,16 @@ void Wallpaper::GetDesktopResolution(int& width, int& height) {
     height = GetSystemMetrics(SM_CYSCREEN);
 }
 
+void Wallpaper::GetVirtualDesktopResolution(int& width, int& height) {
+    width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+}
+
+void Wallpaper::GetVirtualDesktopOffset(int& x, int& y) {
+    x = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    y = GetSystemMetrics(SM_YVIRTUALSCREEN);
+}
+
 #else
 // 非 Windows 平台的空实现
 bool Wallpaper::EmbedAsWallpaper(SDL_Window*) {
@@ -100,5 +112,15 @@ void Wallpaper::Restore() {}
 void Wallpaper::GetDesktopResolution(int& width, int& height) {
     width = 1920;
     height = 1080;
+}
+
+void Wallpaper::GetVirtualDesktopResolution(int& width, int& height) {
+    width = 1920;
+    height = 1080;
+}
+
+void Wallpaper::GetVirtualDesktopOffset(int& x, int& y) {
+    x = 0;
+    y = 0;
 }
 #endif

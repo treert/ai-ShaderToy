@@ -1,9 +1,11 @@
+#define NOMINMAX
 #include <iostream>
 #include <string>
 #include <ctime>
 #include <vector>
 #include <atomic>
 #include <mutex>
+#include <algorithm>
 
 #include <glad/glad.h>
 #include <SDL.h>
@@ -113,9 +115,9 @@ int main(int argc, char* argv[]) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 
-    // 壁纸模式时使用桌面分辨率
+    // 壁纸模式时使用虚拟桌面分辨率（覆盖所有显示器）
     if (config.wallpaperMode) {
-        Wallpaper::GetDesktopResolution(config.width, config.height);
+        Wallpaper::GetVirtualDesktopResolution(config.width, config.height);
     }
 
     // 创建窗口
@@ -245,12 +247,48 @@ int main(int argc, char* argv[]) {
     }
 
     // ============================================================
+    // 全屏应用检测辅助函数
+    // ============================================================
+#ifdef _WIN32
+    auto IsFullscreenAppRunning = []() -> bool {
+        HWND fg = GetForegroundWindow();
+        if (!fg) return false;
+
+        // 排除桌面和任务栏
+        HWND desktop = GetDesktopWindow();
+        HWND shell = GetShellWindow();
+        if (fg == desktop || fg == shell) return false;
+
+        // 检查类名排除 Progman/WorkerW（桌面本身）
+        wchar_t className[64] = {};
+        GetClassNameW(fg, className, 64);
+        if (wcscmp(className, L"Progman") == 0 || wcscmp(className, L"WorkerW") == 0)
+            return false;
+
+        // 检查窗口是否覆盖了整个屏幕
+        RECT wndRect;
+        GetWindowRect(fg, &wndRect);
+        int scrW = GetSystemMetrics(SM_CXSCREEN);
+        int scrH = GetSystemMetrics(SM_CYSCREEN);
+        return (wndRect.left <= 0 && wndRect.top <= 0 &&
+                wndRect.right >= scrW && wndRect.bottom >= scrH);
+    };
+#endif
+
+    // ============================================================
     // 主循环
     // ============================================================
     Uint64 startTime = SDL_GetPerformanceCounter();
     Uint64 freq = SDL_GetPerformanceFrequency();
     float lastFrameTime = 0.0f;
     int frameCount = 0;
+    Uint32 fullscreenCheckTimer = 0;  // 全屏检测计时
+    bool autoPaused = false;          // 因全屏应用而自动暂停
+
+    // 帧率自适应
+    float adaptiveFPS = static_cast<float>(config.targetFPS);
+    float frameTimeAccum = 0.0f;
+    int frameTimeCount = 0;
 
     // iMouse: xy=当前鼠标位置, zw=按下瞬间的位置（松开后取负值）
     float mouse[4] = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -318,6 +356,28 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
+        // 壁纸模式：每秒检测一次全屏应用
+#ifdef _WIN32
+        if (config.wallpaperMode) {
+            Uint32 now_ms = SDL_GetTicks();
+            if (now_ms - fullscreenCheckTimer > 1000) {
+                fullscreenCheckTimer = now_ms;
+                bool fullscreen = IsFullscreenAppRunning();
+                if (fullscreen && !autoPaused) {
+                    autoPaused = true;
+                    std::cout << "Fullscreen app detected, auto-pausing." << std::endl;
+                } else if (!fullscreen && autoPaused) {
+                    autoPaused = false;
+                    std::cout << "Fullscreen app closed, resuming." << std::endl;
+                }
+            }
+            if (autoPaused) {
+                SDL_Delay(500);
+                continue;
+            }
+        }
+#endif
+
         // 时间计算
         Uint64 now = SDL_GetPerformanceCounter();
         float currentTime = static_cast<float>(now - startTime) / static_cast<float>(freq);
@@ -355,9 +415,28 @@ int main(int argc, char* argv[]) {
         SDL_GL_SwapWindow(window);
         frameCount++;
 
-        // 帧率控制
+        // 帧率自适应 + 帧率控制
         if (config.targetFPS > 0) {
-            float targetFrameTime = 1.0f / config.targetFPS;
+            // 统计平均帧时间（每60帧调整一次）
+            frameTimeAccum += timeDelta;
+            frameTimeCount++;
+            if (frameTimeCount >= 60) {
+                float avgFrameTime = frameTimeAccum / static_cast<float>(frameTimeCount);
+                float maxFrameTime = 1.0f / static_cast<float>(config.targetFPS);
+
+                if (avgFrameTime > maxFrameTime * 1.5f && adaptiveFPS > 15.0f) {
+                    // GPU 负载过高，降低帧率
+                    adaptiveFPS = std::max(15.0f, adaptiveFPS * 0.8f);
+                    std::cout << "Adaptive FPS: lowered to " << static_cast<int>(adaptiveFPS) << std::endl;
+                } else if (avgFrameTime < maxFrameTime * 0.7f && adaptiveFPS < static_cast<float>(config.targetFPS)) {
+                    // GPU 负载轻松，恢复帧率
+                    adaptiveFPS = std::min(static_cast<float>(config.targetFPS), adaptiveFPS * 1.2f);
+                }
+                frameTimeAccum = 0.0f;
+                frameTimeCount = 0;
+            }
+
+            float targetFrameTime = 1.0f / adaptiveFPS;
             if (timeDelta < targetFrameTime) {
                 SDL_Delay(static_cast<Uint32>((targetFrameTime - timeDelta) * 1000.0f));
             }
