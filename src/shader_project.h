@@ -10,7 +10,7 @@
 
 /// 单个 pass 的通道输入配置
 struct ChannelBinding {
-    enum class Source { None, Buffer, ExternalTexture, Keyboard };
+    enum class Source { None, Buffer, ExternalTexture, Keyboard, CubeMapPass };
     Source source = Source::None;
     int bufferIndex = -1;           // Buffer A=0, B=1, C=2, D=3
     std::string texturePath;        // 外部纹理文件路径
@@ -30,6 +30,8 @@ struct ShaderProjectData {
     std::string commonSource;               // Common 段共享 GLSL 代码
     std::vector<PassData> bufferPasses;     // Buffer A~D（按索引排序，最多4个）
     PassData imagePass;                     // Image pass（必须存在）
+    PassData cubeMapPass;                   // Cube A pass（可选，渲染到 samplerCube）
+    bool hasCubeMapPass = false;            // 是否有 Cube A pass
     bool isMultiPass = false;               // 是否有 buffer pass
 
     /// 获取所有外部纹理路径（去重）

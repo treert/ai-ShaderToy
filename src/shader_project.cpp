@@ -12,6 +12,9 @@
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
+// Cube A pass 在 outputIdMap 中使用的特殊索引（区别于 Buffer 0~3）
+static constexpr int CUBEMAP_PASS_INDEX = 10;
+
 // ============================================================
 // ShaderProjectData
 // ============================================================
@@ -32,6 +35,9 @@ std::vector<std::string> ShaderProjectData::GetExternalTexturePaths() const {
     collectFromPass(imagePass);
     for (const auto& buf : bufferPasses) {
         collectFromPass(buf);
+    }
+    if (hasCubeMapPass) {
+        collectFromPass(cubeMapPass);
     }
     return paths;
 }
@@ -157,6 +163,7 @@ bool ShaderProject::LoadFromJSON(const std::string& path) {
     // ---- 第一遍：扫描 outputs，建立 output id → buffer index 映射 ----
     // ShaderToy 导出的 JSON 中，每个 buffer pass 有 outputs[0].id，
     // 其他 pass 的 inputs 通过相同的 id 引用此 buffer。
+    // Cube A pass 使用特殊索引 CUBEMAP_PASS_INDEX 表示。
     std::unordered_map<std::string, int> outputIdMap;
     {
         // 按出现顺序为 buffer 分配索引
@@ -179,6 +186,16 @@ bool ShaderProject::LoadFromJSON(const std::string& path) {
                         std::string outId = out.value("id", "");
                         if (!outId.empty()) {
                             outputIdMap[outId] = bufIdx;
+                        }
+                    }
+                }
+            } else if (rpType == "cubemap") {
+                // Cube A pass: 记录 output id -> CUBEMAP_PASS_INDEX
+                if (rp.contains("outputs") && rp["outputs"].is_array()) {
+                    for (const auto& out : rp["outputs"]) {
+                        std::string outId = out.value("id", "");
+                        if (!outId.empty()) {
+                            outputIdMap[outId] = CUBEMAP_PASS_INDEX;
                         }
                     }
                 }
@@ -237,9 +254,27 @@ bool ShaderProject::LoadFromJSON(const std::string& path) {
             continue;
         }
 
-        // sound / cubemap pass — 暂不支持
-        if (type == "sound" || type == "cubemap") {
-            std::cerr << "Warning: pass type '" << type << "' not supported, skipping" << std::endl;
+        // cubemap pass — Cube A
+        if (type == "cubemap") {
+            data_.cubeMapPass.name = "Cube A";
+            data_.cubeMapPass.code = code;
+            data_.hasCubeMapPass = true;
+
+            // 解析 inputs
+            if (rp.contains("inputs") && rp["inputs"].is_array()) {
+                for (const auto& inp : rp["inputs"]) {
+                    int channel = inp.value("channel", -1);
+                    if (channel < 0 || channel >= 4) continue;
+                    ParseInputBinding(inp, data_.cubeMapPass.channels[channel],
+                                      jsonDir, outputIdMap);
+                }
+            }
+            continue;
+        }
+
+        // sound pass — 暂不支持
+        if (type == "sound") {
+            std::cerr << "Warning: pass type 'sound' not supported, skipping" << std::endl;
             continue;
         }
     }
@@ -255,10 +290,11 @@ bool ShaderProject::LoadFromJSON(const std::string& path) {
             data_.bufferPasses.push_back(bufferSlots[i]);
         }
     }
-    data_.isMultiPass = !data_.bufferPasses.empty();
+    data_.isMultiPass = !data_.bufferPasses.empty() || data_.hasCubeMapPass;
 
     std::cout << "ShaderProject: loaded JSON '" << path << "' — "
               << data_.bufferPasses.size() << " buffer pass(es)"
+              << (data_.hasCubeMapPass ? " + Cube A" : "")
               << (data_.commonSource.empty() ? "" : " + common")
               << std::endl;
     return true;
@@ -319,6 +355,16 @@ bool ShaderProject::LoadFromDirectory(const std::string& dirPath) {
 
     data_.isMultiPass = !data_.bufferPasses.empty();
 
+    // cube_a.glsl (可选, CubeMap pass)
+    fs::path cubeAPath = dir / "cube_a.glsl";
+    if (fs::exists(cubeAPath)) {
+        data_.cubeMapPass.name = "Cube A";
+        data_.cubeMapPass.code = readFileContent(cubeAPath);
+        data_.hasCubeMapPass = true;
+        data_.isMultiPass = true;
+        allFiles_.push_back(cubeAPath.string());
+    }
+
     // channels.json (可选，配置各 pass 的 iChannel 绑定)
     fs::path channelsPath = dir / "channels.json";
     if (fs::exists(channelsPath)) {
@@ -360,6 +406,9 @@ bool ShaderProject::LoadFromDirectory(const std::string& dirPath) {
                     } else if (value == "buf_d" || value == "buffer_d" || value == "Buffer D") {
                         binding.source = ChannelBinding::Source::Buffer;
                         binding.bufferIndex = 3;
+                    } else if (value == "cube_a" || value == "Cube A") {
+                        binding.source = ChannelBinding::Source::CubeMapPass;
+                        binding.textureType = ChannelType::CubeMap;
                     } else {
                         // 视为外部纹理路径
                         binding.source = ChannelBinding::Source::ExternalTexture;
@@ -389,6 +438,11 @@ bool ShaderProject::LoadFromDirectory(const std::string& dirPath) {
                 if (idx >= 0 && idx < 4) {
                     parsePassChannels(bufKeys[idx], bp);
                 }
+            }
+
+            // cube_a pass
+            if (data_.hasCubeMapPass) {
+                parsePassChannels("cube_a", data_.cubeMapPass);
             }
 
             std::cout << "ShaderProject: parsed channels.json" << std::endl;
@@ -421,6 +475,7 @@ applyDefaults:
 done:
     std::cout << "ShaderProject: loaded directory '" << dirPath << "' — "
               << data_.bufferPasses.size() << " buffer pass(es)"
+              << (data_.hasCubeMapPass ? " + Cube A" : "")
               << (data_.commonSource.empty() ? "" : " + common")
               << std::endl;
     return true;
@@ -508,13 +563,19 @@ void ShaderProject::ParseInputBinding(const json& inp, ChannelBinding& binding,
 
     // ---- buffer 类型 ----
     if (inputType == "buffer") {
-        binding.source = ChannelBinding::Source::Buffer;
-
         // 优先通过 output id 映射表查找 buffer 索引
         auto it = outputIdMap.find(inputId);
         if (it != outputIdMap.end()) {
-            binding.bufferIndex = it->second;
+            if (it->second == CUBEMAP_PASS_INDEX) {
+                // 引用的是 Cube A pass 的输出（samplerCube）
+                binding.source = ChannelBinding::Source::CubeMapPass;
+                binding.textureType = ChannelType::CubeMap;
+            } else {
+                binding.source = ChannelBinding::Source::Buffer;
+                binding.bufferIndex = it->second;
+            }
         } else {
+            binding.source = ChannelBinding::Source::Buffer;
             // fallback: 从 filepath 的 bufferNN 中提取索引
             // 例如 "/media/previz/buffer00.png" -> 0
             std::regex bufRe(R"(buffer0*(\d+))");

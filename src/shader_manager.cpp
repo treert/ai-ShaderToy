@@ -22,6 +22,7 @@ ShaderManager::~ShaderManager() {
 ShaderManager::ShaderManager(ShaderManager&& other) noexcept
     : program_(other.program_), lastError_(std::move(other.lastError_)),
       commonSource_(std::move(other.commonSource_)),
+      isCubeMapPass_(other.isCubeMapPass_),
       channelTypes_(other.channelTypes_) {
     other.program_ = 0;
 }
@@ -32,6 +33,7 @@ ShaderManager& ShaderManager::operator=(ShaderManager&& other) noexcept {
         program_ = other.program_;
         lastError_ = std::move(other.lastError_);
         commonSource_ = std::move(other.commonSource_);
+        isCubeMapPass_ = other.isCubeMapPass_;
         channelTypes_ = other.channelTypes_;
         other.program_ = 0;
     }
@@ -44,6 +46,10 @@ void ShaderManager::SetChannelTypes(const std::array<ChannelType, 4>& types) {
 
 void ShaderManager::SetCommonSource(const std::string& common) {
     commonSource_ = common;
+}
+
+void ShaderManager::SetCubeMapPassMode(bool isCubeMap) {
+    isCubeMapPass_ = isCubeMap;
 }
 
 bool ShaderManager::LoadFromFile(const std::string& filePath) {
@@ -136,9 +142,20 @@ uniform vec3      iChannelResolution[4]; // 各通道分辨率
 // 自定义扩展 uniform（非 ShaderToy 标准）
 uniform float     iClickTime;           // 最近一次点击的时间 (seconds)
 
-out vec4 _fragColor_out;
+)glsl";
+
+    // CubeMap pass 模式：额外声明 uniform 传递面方向信息
+    if (isCubeMapPass_) {
+        wrapped += R"glsl(
+// CubeMap pass uniforms
+uniform vec3  _cubeFaceRight;   // 当前面的 X 轴方向
+uniform vec3  _cubeFaceUp;      // 当前面的 Y 轴方向
+uniform vec3  _cubeFaceDir;     // 当前面的 Z 轴方向（面法线，指向面中心）
 
 )glsl";
+    }
+
+    wrapped += "out vec4 _fragColor_out;\n\n";
 
     // 注入 Common 共享代码段（多 Pass 时各 pass 共享的函数/结构体/常量）
     if (!commonSource_.empty()) {
@@ -150,14 +167,28 @@ out vec4 _fragColor_out;
     // 插入用户的 ShaderToy 源码
     wrapped += source;
 
-    // 添加 main 函数，调用 ShaderToy 的 mainImage
-    wrapped += R"glsl(
+    // 添加 main 函数，调用 ShaderToy 的 mainImage 或 mainCubemap
+    if (isCubeMapPass_) {
+        wrapped += R"glsl(
+
+void main() {
+    _fragColor_out = vec4(0.0);
+    // 将像素坐标映射到 [-1, 1]，然后通过面方向矩阵计算 rayDir
+    vec2 uv = (gl_FragCoord.xy / iResolution.xy) * 2.0 - 1.0;
+    vec3 rayDir = normalize(_cubeFaceDir + uv.x * _cubeFaceRight + uv.y * _cubeFaceUp);
+    vec3 rayOri = vec3(0.0);
+    mainCubemap(_fragColor_out, gl_FragCoord.xy, rayOri, rayDir);
+}
+)glsl";
+    } else {
+        wrapped += R"glsl(
 
 void main() {
     _fragColor_out = vec4(0.0);
     mainImage(_fragColor_out, gl_FragCoord.xy);
 }
 )glsl";
+    }
 
     return wrapped;
 }

@@ -21,7 +21,7 @@ ShaderToyDesktop.exe --shader exported_shader.json
 ```
 - 兼容两种 JSON 格式：API 格式（有 `"Shader"` 包裹层）和直接导出格式（无包裹层）
 - 兼容两套字段名：ShaderToy 网站格式（`"type"` / `"filepath"` / `"id"`）和自定义格式（`"ctype"` / `"src"`）
-- 识别 `image`、`buffer`、`common` 三种 pass 类型
+- 识别 `image`、`buffer`、`common`、`cubemap` 四种 pass 类型
 - 通过 output id 映射表精确解析 Buffer 间引用关系（替代旧的字符串匹配）
 - 纹理路径自动映射到本地 `assets/` 目录（支持 `/media/a/HASH.ext` 和 `/presets/texNN.ext`）
 - `keyboard` 输入类型被识别并静默忽略（不阻塞加载）
@@ -34,6 +34,7 @@ ShaderToyDesktop.exe --shader assets/shaders/multipass_demo/
 - 按约定文件名加载：
   - `image.glsl` — Image pass（必须）
   - `buf_a.glsl` ~ `buf_d.glsl` — Buffer A~D（可选）
+  - `cube_a.glsl` — Cube A pass（可选，使用 mainCubemap 函数）
   - `common.glsl` — 共享代码（可选）
   - `channels.json` — 通道配置（可选）
 - 目录名作为项目名
@@ -104,7 +105,7 @@ ShaderToyDesktop.exe --shader assets/shaders/multipass_demo/
   → ShaderProjectData（各 pass 源码 + 通道映射 + Common 代码）
   → MultiPassRenderer 初始化（编译 shader + 创建 FBO）
   → 主渲染循环: RenderAllPasses()
-  → Buffer A~D FBO 渲染 → Image pass 输出
+  → Cube A 6面 FBO 渲染（如有）→ Buffer A~D FBO 渲染 → Image pass 输出
   → DebugUI + SwapWindow
 ```
 
@@ -125,17 +126,19 @@ struct ShaderProjectData {
     std::string commonSource;           // Common 共享 GLSL
     std::vector<PassData> bufferPasses; // Buffer A~D
     PassData imagePass;                 // Image pass
+    PassData cubeMapPass;               // Cube A pass（可选）
+    bool hasCubeMapPass;
     bool isMultiPass;
 };
 
 struct PassData {
-    std::string name;                   // "Image", "Buffer A", ...
+    std::string name;                   // "Image", "Buffer A", "Cube A", ...
     std::string code;                   // GLSL 源码
     std::array<ChannelBinding, 4> channels; // iChannel0~3 绑定
 };
 
 struct ChannelBinding {
-    Source source;          // None / Buffer / ExternalTexture
+    Source source;          // None / Buffer / ExternalTexture / CubeMapPass
     int bufferIndex;        // Buffer A=0, B=1, C=2, D=3
     std::string texturePath;
     ChannelType textureType;

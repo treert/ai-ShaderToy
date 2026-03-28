@@ -65,3 +65,4 @@
 - [x] 纹理路径查找增强（支持 /media/a/ 和 /presets/ 到 assets/ 目录映射）
 - [x] JSON input 解析重构（抽取 ParseInputBinding 辅助函数消除重复代码）
 - [x] json2dir.py 工具（tools/ 目录，JSON 转目录格式）
+- [x] Cube A (CubeMap) pass 支持（mainCubemap 包装、6面 FBO 渲染、双缓冲、samplerCube 输出）

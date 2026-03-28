@@ -120,8 +120,9 @@ def convert_json_to_dir(json_path: str, output_dir: str, force: bool = False):
         print("错误: JSON 缺少 'renderpass' 数组", file=sys.stderr)
         return False
 
-    # ---- 第一遍：扫描 buffer outputs，建立 output id → buffer index 映射 ----
-    output_id_map = {}  # output_id -> buffer_index
+    # ---- 第一遍：扫描 buffer/cubemap outputs，建立 output id → index 映射 ----
+    CUBEMAP_PASS_INDEX = 10  # 特殊标记
+    output_id_map = {}  # output_id -> buffer_index or CUBEMAP_PASS_INDEX
     buf_count = 0
     for rp in renderpasses:
         rp_type = get_field(rp, "type", "type")
@@ -138,6 +139,13 @@ def convert_json_to_dir(json_path: str, output_dir: str, force: bool = False):
                     out_id = out.get("id", "")
                     if out_id:
                         output_id_map[out_id] = buf_idx
+        elif rp_type == "cubemap":
+            outputs = rp.get("outputs", [])
+            if isinstance(outputs, list):
+                for out in outputs:
+                    out_id = out.get("id", "")
+                    if out_id:
+                        output_id_map[out_id] = CUBEMAP_PASS_INDEX
 
     # ---- 第二遍：解析各 renderpass ----
     common_code = None
@@ -145,6 +153,7 @@ def convert_json_to_dir(json_path: str, output_dir: str, force: bool = False):
     image_inputs = []  # [(channel, binding_info), ...]
     # buffer_slots[0..3] = { "code": ..., "inputs": [...] } or None
     buffer_slots = [None, None, None, None]
+    cube_a = None  # { "code": ..., "inputs": [...] } or None
 
     for rp in renderpasses:
         rp_type = get_field(rp, "type", "type")
@@ -156,7 +165,7 @@ def convert_json_to_dir(json_path: str, output_dir: str, force: bool = False):
 
         if rp_type == "image":
             image_code = code
-            image_inputs = _parse_inputs(rp, output_id_map)
+            image_inputs = _parse_inputs(rp, output_id_map, CUBEMAP_PASS_INDEX)
             continue
 
         if rp_type == "buffer":
@@ -167,12 +176,19 @@ def convert_json_to_dir(json_path: str, output_dir: str, force: bool = False):
                 continue
             buffer_slots[buf_idx] = {
                 "code": code,
-                "inputs": _parse_inputs(rp, output_id_map),
+                "inputs": _parse_inputs(rp, output_id_map, CUBEMAP_PASS_INDEX),
             }
             continue
 
-        if rp_type in ("sound", "cubemap"):
-            print(f"警告: 不支持的 pass 类型 '{rp_type}'，跳过", file=sys.stderr)
+        if rp_type == "cubemap":
+            cube_a = {
+                "code": code,
+                "inputs": _parse_inputs(rp, output_id_map, CUBEMAP_PASS_INDEX),
+            }
+            continue
+
+        if rp_type == "sound":
+            print(f"警告: 不支持的 pass 类型 'sound'，跳过", file=sys.stderr)
             continue
 
     if image_code is None:
@@ -206,6 +222,11 @@ def convert_json_to_dir(json_path: str, output_dir: str, force: bool = False):
             _write_file(out_path / filename, buffer_slots[i]["code"])
             files_written.append(filename)
 
+    # cube_a.glsl (Cube A pass)
+    if cube_a is not None:
+        _write_file(out_path / "cube_a.glsl", cube_a["code"])
+        files_written.append("cube_a.glsl")
+
     # common.glsl
     if common_code:
         _write_file(out_path / "common.glsl", common_code)
@@ -217,6 +238,8 @@ def convert_json_to_dir(json_path: str, output_dir: str, force: bool = False):
     for i in range(4):
         if buffer_slots[i] is not None:
             _add_pass_channels(channels, BUFFER_NAMES[i], buffer_slots[i]["inputs"])
+    if cube_a is not None:
+        _add_pass_channels(channels, "cube_a", cube_a["inputs"])
 
     if channels:
         channels_path = out_path / "channels.json"
@@ -230,8 +253,12 @@ def convert_json_to_dir(json_path: str, output_dir: str, force: bool = False):
     print(f"\n转换完成！")
     print(f"  项目名称: {project_name}")
     print(f"  输出目录: {out_path}")
-    print(f"  Pass 数量: 1 image + {buffer_count} buffer(s)" +
-          (" + common" if common_code else ""))
+    parts = [f"1 image", f"{buffer_count} buffer(s)"]
+    if cube_a:
+        parts.append("Cube A")
+    if common_code:
+        parts.append("common")
+    print(f"  Pass 数量: {' + '.join(parts)}")
     print(f"  生成文件: {', '.join(files_written)}")
 
     # 显示通道绑定摘要
@@ -244,9 +271,10 @@ def convert_json_to_dir(json_path: str, output_dir: str, force: bool = False):
     return True
 
 
-def _parse_inputs(rp: dict, output_id_map: dict) -> list:
+def _parse_inputs(rp: dict, output_id_map: dict, cubemap_pass_index: int = 10) -> list:
     """解析 renderpass 的 inputs 数组，返回 [(channel, binding_info), ...]。
     binding_info = {"type": "buffer", "buffer": "buf_a"} 
+                 | {"type": "cubemap_pass", "buffer": "cube_a"}
                  | {"type": "texture", "path": "..."}
                  | None (keyboard 等忽略的类型)"""
     inputs = rp.get("inputs", [])
@@ -264,12 +292,16 @@ def _parse_inputs(rp: dict, output_id_map: dict) -> list:
         input_id = inp.get("id", "")
 
         if input_type == "buffer":
-            buf_idx = resolve_input_buffer_index(input_id, input_path, output_id_map)
-            if 0 <= buf_idx <= 3:
-                result.append((channel, {"type": "buffer", "buffer": BUFFER_NAMES[buf_idx]}))
+            # 检查是否引用了 cubemap pass 的输出
+            if input_id and input_id in output_id_map and output_id_map[input_id] == cubemap_pass_index:
+                result.append((channel, {"type": "buffer", "buffer": "cube_a"}))
             else:
-                print(f"  警告: 无法解析 buffer 引用 (id={input_id}, path={input_path})",
-                      file=sys.stderr)
+                buf_idx = resolve_input_buffer_index(input_id, input_path, output_id_map)
+                if 0 <= buf_idx <= 3:
+                    result.append((channel, {"type": "buffer", "buffer": BUFFER_NAMES[buf_idx]}))
+                else:
+                    print(f"  警告: 无法解析 buffer 引用 (id={input_id}, path={input_path})",
+                          file=sys.stderr)
 
         elif input_type == "texture":
             result.append((channel, {"type": "texture", "path": input_path}))

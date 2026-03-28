@@ -439,6 +439,9 @@ int main(int argc, char* argv[]) {
         for (const auto& bp : projData.bufferPasses) {
             loadPassTextures(bp);
         }
+        if (projData.hasCubeMapPass) {
+            loadPassTextures(projData.cubeMapPass);
+        }
     }
 
     // 从实际加载结果同步通道类型
@@ -480,22 +483,44 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // 添加 Buffer passes
-        for (const auto& bp : data.bufferPasses) {
-            std::array<int, 4> inputs = {-1, -1, -1, -1};
-            std::array<ChannelType, 4> chTypes = {
+        // 辅助 lambda：将 ChannelBinding 转换为 inputChannels 和 channelTypes
+        auto resolveChannels = [](const PassData& pass,
+                                  std::array<int, 4>& inputs,
+                                  std::array<ChannelType, 4>& chTypes) {
+            inputs = {-1, -1, -1, -1};
+            chTypes = {
                 ChannelType::Texture2D, ChannelType::Texture2D,
                 ChannelType::Texture2D, ChannelType::Texture2D
             };
             for (int i = 0; i < 4; ++i) {
-                const auto& ch = bp.channels[i];
+                const auto& ch = pass.channels[i];
                 if (ch.source == ChannelBinding::Source::Buffer) {
                     inputs[i] = ch.bufferIndex;
                 } else if (ch.source == ChannelBinding::Source::ExternalTexture) {
                     inputs[i] = 100 + i;  // 外部纹理通道
                     chTypes[i] = ch.textureType;
+                } else if (ch.source == ChannelBinding::Source::CubeMapPass) {
+                    inputs[i] = 200;  // CubeMap pass 输出
+                    chTypes[i] = ChannelType::CubeMap;
                 }
             }
+        };
+
+        // 设置 CubeMap pass（如果有）
+        if (data.hasCubeMapPass) {
+            std::array<int, 4> inputs;
+            std::array<ChannelType, 4> chTypes;
+            resolveChannels(data.cubeMapPass, inputs, chTypes);
+            if (!multiPass.SetCubeMapPass(data.cubeMapPass.code, inputs, chTypes)) {
+                return false;
+            }
+        }
+
+        // 添加 Buffer passes
+        for (const auto& bp : data.bufferPasses) {
+            std::array<int, 4> inputs;
+            std::array<ChannelType, 4> chTypes;
+            resolveChannels(bp, inputs, chTypes);
             if (multiPass.AddBufferPass(bp.name, bp.code, inputs, chTypes) < 0) {
                 return false;
             }
@@ -503,20 +528,9 @@ int main(int argc, char* argv[]) {
 
         // 设置 Image pass
         {
-            std::array<int, 4> inputs = {-1, -1, -1, -1};
-            std::array<ChannelType, 4> chTypes = {
-                ChannelType::Texture2D, ChannelType::Texture2D,
-                ChannelType::Texture2D, ChannelType::Texture2D
-            };
-            for (int i = 0; i < 4; ++i) {
-                const auto& ch = data.imagePass.channels[i];
-                if (ch.source == ChannelBinding::Source::Buffer) {
-                    inputs[i] = ch.bufferIndex;
-                } else if (ch.source == ChannelBinding::Source::ExternalTexture) {
-                    inputs[i] = 100 + i;
-                    chTypes[i] = ch.textureType;
-                }
-            }
+            std::array<int, 4> inputs;
+            std::array<ChannelType, 4> chTypes;
+            resolveChannels(data.imagePass, inputs, chTypes);
             if (!multiPass.SetImagePass(data.imagePass.code, inputs, chTypes)) {
                 return false;
             }
