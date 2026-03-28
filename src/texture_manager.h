@@ -3,8 +3,10 @@
 #include <string>
 #include <array>
 #include <glad/glad.h>
+#include "shader_manager.h"  // for ChannelType
 
 /// TextureManager 负责加载图片为 OpenGL 纹理，用于 ShaderToy 的 iChannel 输入。
+/// 支持 2D 纹理和 CubeMap。
 class TextureManager {
 public:
     static constexpr int kMaxChannels = 4;
@@ -12,11 +14,14 @@ public:
     TextureManager();
     ~TextureManager();
 
-    /// 为指定通道加载图片纹理
-    /// @param channel 通道编号 (0-3)
-    /// @param filePath 图片文件路径
-    /// @return true 如果加载成功
+    /// 为指定通道加载 2D 纹理
     bool LoadTexture(int channel, const std::string& filePath);
+
+    /// 为指定通道加载 CubeMap
+    /// 支持两种模式：
+    ///   1. 单张图片（自动检测十字/横条/竖条布局并切割为6面）
+    ///   2. 路径含通配符 %s，自动替换为 px/nx/py/ny/pz/nz 加载6张文件
+    bool LoadCubeMap(int channel, const std::string& filePath);
 
     /// 绑定所有通道纹理到对应纹理单元
     void BindAll() const;
@@ -33,15 +38,23 @@ public:
     /// 指定通道是否已加载纹理
     bool HasTexture(int channel) const;
 
+    /// 获取通道的采样器类型
+    ChannelType GetChannelType(int channel) const;
+
     /// 将指定通道绑定为 FBO 纹理（用于 Buffer pass 输出）
     void SetBufferTexture(int channel, GLuint texture, int width, int height);
 
 private:
+    /// 从单张图片切割6面生成 CubeMap
+    GLuint CreateCubeMapFromSingleImage(unsigned char* data, int imgW, int imgH,
+                                        int faceSize);
+
     struct ChannelInfo {
         GLuint texture = 0;
         int width = 0;
         int height = 0;
-        bool isOwned = true;  // 是否由 TextureManager 拥有（需要负责删除）
+        bool isOwned = true;
+        ChannelType type = ChannelType::None;
     };
 
     std::array<ChannelInfo, kMaxChannels> channels_;

@@ -50,6 +50,14 @@ void Renderer::RenderFrame(ShaderManager& shader, float time, float timeDelta,
                 date[0], date[1], date[2], date[3]);
     glUniform1f(shader.GetUniformLocation("iSampleRate"), 44100.0f);
 
+    // iFrameRate: 帧率（用 timeDelta 的倒数）
+    float frameRate = (timeDelta > 0.0f) ? (1.0f / timeDelta) : 60.0f;
+    glUniform1f(shader.GetUniformLocation("iFrameRate"), frameRate);
+
+    // iChannelTime: 各通道播放时间（目前与 iTime 一致）
+    float channelTime[4] = {time, time, time, time};
+    glUniform1fv(shader.GetUniformLocation("iChannelTime"), 4, channelTime);
+
     // 绘制全屏四边形
     glBindVertexArray(vao_);
     glDrawArrays(GL_TRIANGLES, 0, 6);

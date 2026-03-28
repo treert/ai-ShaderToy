@@ -173,6 +173,11 @@ void MultiPassRenderer::RenderSinglePass(RenderPass& pass, GLuint quadVAO,
                 mouse[0], mouse[1], mouse[2], mouse[3]);
     glUniform4f(pass.shader.GetUniformLocation("iDate"),
                 date[0], date[1], date[2], date[3]);
+    glUniform1f(pass.shader.GetUniformLocation("iSampleRate"), 44100.0f);
+    float frameRate = (timeDelta > 0.0f) ? (1.0f / timeDelta) : 60.0f;
+    glUniform1f(pass.shader.GetUniformLocation("iFrameRate"), frameRate);
+    float channelTime[4] = {time, time, time, time};
+    glUniform1fv(pass.shader.GetUniformLocation("iChannelTime"), 4, channelTime);
 
     // 绑定输入纹理到 iChannel0~3
     for (int i = 0; i < 4; ++i) {

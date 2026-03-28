@@ -6,6 +6,7 @@
 #include <atomic>
 #include <mutex>
 #include <algorithm>
+#include <array>
 
 #include <glad/glad.h>
 #include <SDL.h>
@@ -30,6 +31,10 @@ struct AppConfig {
     std::string channel1;  // iChannel1 纹理路径
     std::string channel2;  // iChannel2 纹理路径
     std::string channel3;  // iChannel3 纹理路径
+    std::array<ChannelType, 4> channelTypes = {
+        ChannelType::Texture2D, ChannelType::Texture2D,
+        ChannelType::Texture2D, ChannelType::Texture2D
+    };
     bool        wallpaperMode = false;
     bool        hotReload = true;
     int         width  = kDefaultWidth;
@@ -58,6 +63,10 @@ static void PrintUsage(const char* programName) {
               << "  --channel1 <path>    iChannel1 texture image\n"
               << "  --channel2 <path>    iChannel2 texture image\n"
               << "  --channel3 <path>    iChannel3 texture image\n"
+              << "  --channeltype0 <t>   iChannel0 type: 2d (default), cube\n"
+              << "  --channeltype1 <t>   iChannel1 type: 2d (default), cube\n"
+              << "  --channeltype2 <t>   iChannel2 type: 2d (default), cube\n"
+              << "  --channeltype3 <t>   iChannel3 type: 2d (default), cube\n"
               << "  --wallpaper          Run as desktop wallpaper\n"
               << "  --no-hotreload       Disable shader hot reload\n"
               << "  --width <n>          Window width (default: " << kDefaultWidth << ")\n"
@@ -80,6 +89,17 @@ static AppConfig ParseArgs(int argc, char* argv[]) {
             config.channel2 = argv[++i];
         } else if (arg == "--channel3" && i + 1 < argc) {
             config.channel3 = argv[++i];
+        } else if (arg.rfind("--channeltype", 0) == 0 && arg.size() == 14 && i + 1 < argc) {
+            int idx = arg[13] - '0';
+            std::string typeStr = argv[++i];
+            if (idx >= 0 && idx < 4) {
+                if (typeStr == "cube" || typeStr == "cubemap")
+                    config.channelTypes[idx] = ChannelType::CubeMap;
+                else if (typeStr == "3d")
+                    config.channelTypes[idx] = ChannelType::Texture3D;
+                else
+                    config.channelTypes[idx] = ChannelType::Texture2D;
+            }
         } else if (arg == "--wallpaper") {
             config.wallpaperMode = true;
         } else if (arg == "--no-hotreload") {
@@ -200,15 +220,31 @@ int main(int argc, char* argv[]) {
     // 加载纹理
     // ============================================================
     TextureManager textures;
-    if (!config.channel0.empty()) textures.LoadTexture(0, config.channel0);
-    if (!config.channel1.empty()) textures.LoadTexture(1, config.channel1);
-    if (!config.channel2.empty()) textures.LoadTexture(2, config.channel2);
-    if (!config.channel3.empty()) textures.LoadTexture(3, config.channel3);
+    std::string channelPaths[4] = {config.channel0, config.channel1, config.channel2, config.channel3};
+    for (int i = 0; i < 4; ++i) {
+        if (channelPaths[i].empty()) continue;
+        if (config.channelTypes[i] == ChannelType::CubeMap) {
+            textures.LoadCubeMap(i, channelPaths[i]);
+        } else {
+            textures.LoadTexture(i, channelPaths[i]);
+        }
+    }
+
+    // 从实际加载结果同步通道类型（LoadTexture/LoadCubeMap 内部会设置）
+    for (int i = 0; i < 4; ++i) {
+        ChannelType actual = textures.GetChannelType(i);
+        if (actual != ChannelType::None) {
+            config.channelTypes[i] = actual;
+        }
+    }
 
     // ============================================================
     // 加载着色器
     // ============================================================
+    // 根据已加载的纹理推断通道类型（未加载的通道也保持 Texture2D 不会出错）
+    // 未来加入 CubeMap/3D 加载时，可通过 --channeltype0 cube 等参数或自动检测
     ShaderManager shader;
+    shader.SetChannelTypes(config.channelTypes);
     if (!shader.LoadFromFile(config.shaderPath)) {
         std::cerr << "Failed to load shader: " << shader.GetLastError() << std::endl;
         SDL_GL_DeleteContext(glContext);
@@ -383,6 +419,7 @@ int main(int argc, char* argv[]) {
         // 热加载：重新编译 shader
         if (shaderNeedsReload.exchange(false)) {
             ShaderManager newShader;
+            newShader.SetChannelTypes(config.channelTypes);
             if (newShader.LoadFromFile(config.shaderPath)) {
                 shader = std::move(newShader);
                 std::cout << "Shader reloaded successfully." << std::endl;
