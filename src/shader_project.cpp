@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <nlohmann/json.hpp>
+#include <regex>
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -153,6 +154,39 @@ bool ShaderProject::LoadFromJSON(const std::string& path) {
     bool hasImagePass = false;
     std::string jsonDir = fs::path(path).parent_path().string();
 
+    // ---- 第一遍：扫描 outputs，建立 output id → buffer index 映射 ----
+    // ShaderToy 导出的 JSON 中，每个 buffer pass 有 outputs[0].id，
+    // 其他 pass 的 inputs 通过相同的 id 引用此 buffer。
+    std::unordered_map<std::string, int> outputIdMap;
+    {
+        // 按出现顺序为 buffer 分配索引
+        int bufCount = 0;
+        for (const auto& rp : renderPasses) {
+            std::string rpType = rp.value("type", "");
+            if (rpType == "buffer") {
+                // 从 name 字段解析 buffer 索引（如 "Buffer A" -> 0）
+                std::string name = rp.value("name", "");
+                int bufIdx = ParseBufferIndex(name);
+                if (bufIdx < 0) {
+                    // name 解析失败，按出现顺序分配
+                    bufIdx = bufCount;
+                }
+                bufCount++;
+
+                // 记录 output id -> buffer index
+                if (rp.contains("outputs") && rp["outputs"].is_array()) {
+                    for (const auto& out : rp["outputs"]) {
+                        std::string outId = out.value("id", "");
+                        if (!outId.empty()) {
+                            outputIdMap[outId] = bufIdx;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- 第二遍：解析各 renderpass ----
     for (const auto& rp : renderPasses) {
         std::string type = rp.value("type", "");
         std::string code = rp.value("code", "");
@@ -172,50 +206,8 @@ bool ShaderProject::LoadFromJSON(const std::string& path) {
                 for (const auto& inp : rp["inputs"]) {
                     int channel = inp.value("channel", -1);
                     if (channel < 0 || channel >= 4) continue;
-
-                    std::string ctype = inp.value("ctype", "");
-                    auto& binding = data_.imagePass.channels[channel];
-
-                    if (ctype == "buffer") {
-                        binding.source = ChannelBinding::Source::Buffer;
-                        std::string src = inp.value("src", "");
-                        binding.bufferIndex = ParseBufferSrcIndex(src);
-                    } else if (ctype == "texture") {
-                        binding.source = ChannelBinding::Source::ExternalTexture;
-                        std::string src = inp.value("src", "");
-                        // 尝试定位本地纹理文件
-                        // 优先在 JSON 同目录下查找文件名部分
-                        fs::path srcPath(src);
-                        std::string filename = srcPath.filename().string();
-                        std::string localPath = jsonDir + "/" + filename;
-                        if (fs::exists(localPath, std::error_code{})) {
-                            binding.texturePath = localPath;
-                        } else if (fs::exists(src, std::error_code{})) {
-                            binding.texturePath = src;
-                        } else {
-                            // 尝试 assets/ 下
-                            std::string assetsPath = "assets/" + filename;
-                            if (fs::exists(assetsPath, std::error_code{})) {
-                                binding.texturePath = assetsPath;
-                            } else {
-                                binding.texturePath = src;  // 保留原始路径
-                                std::cerr << "Warning: texture not found locally: " << src << std::endl;
-                            }
-                        }
-                        binding.textureType = ChannelType::Texture2D;
-                    } else if (ctype == "cubemap") {
-                        binding.source = ChannelBinding::Source::ExternalTexture;
-                        std::string src = inp.value("src", "");
-                        fs::path srcPath(src);
-                        std::string filename = srcPath.filename().string();
-                        std::string localPath = jsonDir + "/" + filename;
-                        if (fs::exists(localPath, std::error_code{})) {
-                            binding.texturePath = localPath;
-                        } else {
-                            binding.texturePath = src;
-                        }
-                        binding.textureType = ChannelType::CubeMap;
-                    }
+                    ParseInputBinding(inp, data_.imagePass.channels[channel],
+                                      jsonDir, outputIdMap);
                 }
             }
             continue;
@@ -238,47 +230,8 @@ bool ShaderProject::LoadFromJSON(const std::string& path) {
                 for (const auto& inp : rp["inputs"]) {
                     int channel = inp.value("channel", -1);
                     if (channel < 0 || channel >= 4) continue;
-
-                    std::string ctype = inp.value("ctype", "");
-                    auto& binding = bufferSlots[bufIdx].channels[channel];
-
-                    if (ctype == "buffer") {
-                        binding.source = ChannelBinding::Source::Buffer;
-                        std::string src = inp.value("src", "");
-                        binding.bufferIndex = ParseBufferSrcIndex(src);
-                    } else if (ctype == "texture") {
-                        binding.source = ChannelBinding::Source::ExternalTexture;
-                        std::string src = inp.value("src", "");
-                        fs::path srcPath(src);
-                        std::string filename = srcPath.filename().string();
-                        std::string localPath = jsonDir + "/" + filename;
-                        if (fs::exists(localPath, std::error_code{})) {
-                            binding.texturePath = localPath;
-                        } else if (fs::exists(src, std::error_code{})) {
-                            binding.texturePath = src;
-                        } else {
-                            std::string assetsPath = "assets/" + filename;
-                            if (fs::exists(assetsPath, std::error_code{})) {
-                                binding.texturePath = assetsPath;
-                            } else {
-                                binding.texturePath = src;
-                                std::cerr << "Warning: texture not found locally: " << src << std::endl;
-                            }
-                        }
-                        binding.textureType = ChannelType::Texture2D;
-                    } else if (ctype == "cubemap") {
-                        binding.source = ChannelBinding::Source::ExternalTexture;
-                        std::string src = inp.value("src", "");
-                        fs::path srcPath(src);
-                        std::string filename = srcPath.filename().string();
-                        std::string localPath = jsonDir + "/" + filename;
-                        if (fs::exists(localPath, std::error_code{})) {
-                            binding.texturePath = localPath;
-                        } else {
-                            binding.texturePath = src;
-                        }
-                        binding.textureType = ChannelType::CubeMap;
-                    }
+                    ParseInputBinding(inp, bufferSlots[bufIdx].channels[channel],
+                                      jsonDir, outputIdMap);
                 }
             }
             continue;
@@ -523,4 +476,134 @@ int ShaderProject::ParseBufferSrcIndex(const std::string& src) {
     } catch (...) {}
 
     return -1;
+}
+
+// ============================================================
+// ParseInputBinding — 解析单个 input 条目
+// ============================================================
+
+void ShaderProject::ParseInputBinding(const json& inp, ChannelBinding& binding,
+                                       const std::string& jsonDir,
+                                       const std::unordered_map<std::string, int>& outputIdMap) {
+    // 兼容两套字段名：
+    //   ShaderToy 网站导出格式: "type", "filepath", "id"
+    //   自定义/文档格式:        "ctype", "src"
+    std::string inputType;
+    if (inp.contains("type") && inp["type"].is_string()) {
+        inputType = inp["type"].get<std::string>();
+    }
+    if (inputType.empty()) {
+        inputType = inp.value("ctype", "");
+    }
+
+    std::string inputPath;
+    if (inp.contains("filepath") && inp["filepath"].is_string()) {
+        inputPath = inp["filepath"].get<std::string>();
+    }
+    if (inputPath.empty()) {
+        inputPath = inp.value("src", "");
+    }
+
+    std::string inputId = inp.value("id", "");
+
+    // ---- buffer 类型 ----
+    if (inputType == "buffer") {
+        binding.source = ChannelBinding::Source::Buffer;
+
+        // 优先通过 output id 映射表查找 buffer 索引
+        auto it = outputIdMap.find(inputId);
+        if (it != outputIdMap.end()) {
+            binding.bufferIndex = it->second;
+        } else {
+            // fallback: 从 filepath 的 bufferNN 中提取索引
+            // 例如 "/media/previz/buffer00.png" -> 0
+            std::regex bufRe(R"(buffer0*(\d+))");
+            std::smatch match;
+            if (std::regex_search(inputPath, match, bufRe)) {
+                binding.bufferIndex = std::stoi(match[1].str());
+            } else {
+                // 再 fallback 到旧逻辑
+                binding.bufferIndex = ParseBufferSrcIndex(inputPath.empty() ? inputId : inputPath);
+            }
+        }
+        return;
+    }
+
+    // ---- texture 类型 ----
+    if (inputType == "texture") {
+        binding.source = ChannelBinding::Source::ExternalTexture;
+        binding.texturePath = ResolveTexturePath(inputPath, jsonDir);
+        binding.textureType = ChannelType::Texture2D;
+        return;
+    }
+
+    // ---- cubemap 类型 ----
+    if (inputType == "cubemap") {
+        binding.source = ChannelBinding::Source::ExternalTexture;
+        binding.texturePath = ResolveTexturePath(inputPath, jsonDir);
+        binding.textureType = ChannelType::CubeMap;
+        return;
+    }
+
+    // ---- keyboard 类型 ----
+    if (inputType == "keyboard") {
+        binding.source = ChannelBinding::Source::Keyboard;
+        std::cout << "Note: keyboard input on channel (ignored, not yet supported)" << std::endl;
+        return;
+    }
+
+    // ---- 未知类型 ----
+    if (!inputType.empty()) {
+        std::cerr << "Warning: unknown input type '" << inputType << "', skipping" << std::endl;
+    }
+}
+
+// ============================================================
+// ResolveTexturePath — 纹理路径查找
+// ============================================================
+
+std::string ShaderProject::ResolveTexturePath(const std::string& filepath,
+                                               const std::string& jsonDir) {
+    if (filepath.empty()) return filepath;
+
+    fs::path srcPath(filepath);
+    std::string filename = srcPath.filename().string();
+
+    // 1. JSON 同目录 + 文件名
+    {
+        std::string localPath = jsonDir + "/" + filename;
+        if (fs::exists(localPath, std::error_code{})) {
+            return localPath;
+        }
+    }
+
+    // 2. assets/ + filepath（去掉前导斜杠），支持 /media/a/xxx.jpg -> assets/media/a/xxx.jpg
+    {
+        std::string relPath = filepath;
+        // 去掉前导斜杠
+        while (!relPath.empty() && (relPath[0] == '/' || relPath[0] == '\\')) {
+            relPath = relPath.substr(1);
+        }
+        std::string assetsFullPath = "assets/" + relPath;
+        if (fs::exists(assetsFullPath, std::error_code{})) {
+            return assetsFullPath;
+        }
+    }
+
+    // 3. assets/ + 文件名
+    {
+        std::string assetsPath = "assets/" + filename;
+        if (fs::exists(assetsPath, std::error_code{})) {
+            return assetsPath;
+        }
+    }
+
+    // 4. 原始路径直接尝试
+    if (fs::exists(filepath, std::error_code{})) {
+        return filepath;
+    }
+
+    // 5. 保留原始路径 + warning
+    std::cerr << "Warning: texture not found locally: " << filepath << std::endl;
+    return filepath;
 }

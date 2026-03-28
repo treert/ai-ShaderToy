@@ -15,13 +15,16 @@ ShaderToyDesktop.exe --shader my_shader.glsl
 - 自动识别为只有 Image pass 的单 Pass 项目
 - `--channel0~3` 和 `--channeltype0~3` 命令行参数仍然有效
 
-### 2. JSON 模式（ShaderToy API 导出）
+### 2. JSON 模式（ShaderToy 导出）
 ```bash
 ShaderToyDesktop.exe --shader exported_shader.json
 ```
-- 自动解析 ShaderToy API 导出的 JSON 格式
+- 兼容两种 JSON 格式：API 格式（有 `"Shader"` 包裹层）和直接导出格式（无包裹层）
+- 兼容两套字段名：ShaderToy 网站格式（`"type"` / `"filepath"` / `"id"`）和自定义格式（`"ctype"` / `"src"`）
 - 识别 `image`、`buffer`、`common` 三种 pass 类型
-- 解析每个 pass 的 `inputs` 通道绑定（texture / buffer）
+- 通过 output id 映射表精确解析 Buffer 间引用关系（替代旧的字符串匹配）
+- 纹理路径自动映射到本地 `assets/` 目录（支持 `/media/a/HASH.ext` 和 `/presets/texNN.ext`）
+- `keyboard` 输入类型被识别并静默忽略（不阻塞加载）
 - 自动判断是单 Pass 还是多 Pass
 
 ### 3. 目录模式

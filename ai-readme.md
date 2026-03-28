@@ -61,3 +61,6 @@
 - [x] 调试 UI 展示渲染模式和各 pass 信息
 - [x] 多 Pass 示例（assets/shaders/multipass_demo/）
 - [x] nlohmann/json 依赖集成（FetchContent）
+- [x] ShaderToy 网站导出 JSON 完全兼容（type/filepath 字段、output id 映射、keyboard 类型识别）
+- [x] 纹理路径查找增强（支持 /media/a/ 和 /presets/ 到 assets/ 目录映射）
+- [x] JSON input 解析重构（抽取 ParseInputBinding 辅助函数消除重复代码）

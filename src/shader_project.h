@@ -4,11 +4,13 @@
 #include <vector>
 #include <array>
 #include <map>
+#include <unordered_map>
 #include "shader_manager.h"  // for ChannelType
+#include <nlohmann/json_fwd.hpp>
 
 /// 单个 pass 的通道输入配置
 struct ChannelBinding {
-    enum class Source { None, Buffer, ExternalTexture };
+    enum class Source { None, Buffer, ExternalTexture, Keyboard };
     Source source = Source::None;
     int bufferIndex = -1;           // Buffer A=0, B=1, C=2, D=3
     std::string texturePath;        // 外部纹理文件路径
@@ -70,6 +72,15 @@ private:
 
     /// 解析 ShaderToy JSON 中 buffer 引用的 src 字段
     static int ParseBufferSrcIndex(const std::string& src);
+
+    /// 解析单个 input 条目，填充 ChannelBinding
+    /// outputIdMap: output id -> buffer index 映射表（用于 ShaderToy 导出格式）
+    void ParseInputBinding(const nlohmann::json& inp, ChannelBinding& binding,
+                           const std::string& jsonDir,
+                           const std::unordered_map<std::string, int>& outputIdMap);
+
+    /// 解析纹理路径：尝试多种本地路径查找策略
+    std::string ResolveTexturePath(const std::string& filepath, const std::string& jsonDir);
 
     ShaderProjectData data_;
     std::vector<std::string> allFiles_;
