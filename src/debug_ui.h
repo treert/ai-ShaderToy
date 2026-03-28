@@ -71,4 +71,10 @@ public:
 private:
     bool initialized_ = false;
     bool visible_     = false;
+
+    // 平滑显示值（EMA）
+    float smoothFPS_       = 0.0f;
+    float smoothFrameTime_ = 0.0f;
+    float smoothTimeDelta_ = 0.0f;
+    bool  smoothInited_    = false;
 };

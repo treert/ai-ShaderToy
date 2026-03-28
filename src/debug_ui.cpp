@@ -66,6 +66,21 @@ void DebugUI::BeginFrame() {
 void DebugUI::Render(DebugUIState& state) {
     if (!initialized_) return;
 
+    // EMA 平滑（smoothing factor 越小越平滑）
+    {
+        constexpr float kSmooth = 0.05f;
+        if (!smoothInited_) {
+            smoothFPS_       = state.fps;
+            smoothFrameTime_ = state.timeDelta * 1000.0f;
+            smoothTimeDelta_ = state.timeDelta;
+            smoothInited_    = true;
+        } else {
+            smoothFPS_       += kSmooth * (state.fps - smoothFPS_);
+            smoothFrameTime_ += kSmooth * (state.timeDelta * 1000.0f - smoothFrameTime_);
+            smoothTimeDelta_ += kSmooth * (state.timeDelta - smoothTimeDelta_);
+        }
+    }
+
     if (visible_) {
         ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(380, 0), ImGuiCond_FirstUseEver);
@@ -78,8 +93,8 @@ void DebugUI::Render(DebugUIState& state) {
         // ============================================================
         if (ImGui::CollapsingHeader("Info", ImGuiTreeNodeFlags_DefaultOpen)) {
             ImGui::Text("FPS: %.1f  (adaptive: %.1f, target: %d)",
-                        state.fps, state.adaptiveFPS, state.targetFPS);
-            ImGui::Text("Frame Time: %.3f ms", state.timeDelta * 1000.0f);
+                        smoothFPS_, state.adaptiveFPS, state.targetFPS);
+            ImGui::Text("Frame Time: %.3f ms", smoothFrameTime_);
             ImGui::Separator();
             ImGui::Text("Shader: %s", state.shaderPath);
             ImGui::Text("Status: %s",
@@ -87,7 +102,7 @@ void DebugUI::Render(DebugUIState& state) {
             ImGui::Separator();
             ImGui::Text("iResolution: %.0f x %.0f", state.resolution[0], state.resolution[1]);
             ImGui::Text("iTime:      %.3f", state.currentTime);
-            ImGui::Text("iTimeDelta: %.4f", state.timeDelta);
+            ImGui::Text("iTimeDelta: %.4f", smoothTimeDelta_);
             ImGui::Text("iFrame:     %d", state.frameCount);
             ImGui::Text("iMouse:     (%.0f, %.0f, %.0f, %.0f)",
                         state.mouse[0], state.mouse[1], state.mouse[2], state.mouse[3]);

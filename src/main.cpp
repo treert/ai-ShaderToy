@@ -268,10 +268,9 @@ int main(int argc, char* argv[]) {
         config.renderScale = config.wallpaperMode ? 0.5f : 1.0f;
     }
 
-    // 壁纸模式关闭 VSync：
-    //   1. WorkerW 嵌入窗口的 VSync 行为因驱动而异，可能不生效或行为异常
-    //   2. 壁纸在桌面图标下方，不需要防撕裂
-    //   3. 改用 SDL_Delay 手动控帧，精确控制帧率且让 CPU/GPU 充分休息
+    // VSync 策略：
+    //   - 窗口模式开启 VSync（防撕裂），配合 SDL_Delay 兜底控帧
+    //   - 壁纸模式关闭 VSync（WorkerW 嵌入窗口 VSync 行为不可靠），纯 SDL_Delay 控帧
     SDL_GL_SetSwapInterval(config.wallpaperMode ? 0 : 1);
 
     std::cout << "Target FPS: " << config.targetFPS
@@ -945,8 +944,12 @@ int main(int argc, char* argv[]) {
 
         // 帧率自适应 + 帧率控制
         if (config.targetFPS > 0) {
-            // 统计平均帧时间（每60帧调整一次）
-            frameTimeAccum += timeDelta;
+            // 测量当前帧实际渲染耗时（从帧开始到渲染完成）
+            Uint64 frameEnd = SDL_GetPerformanceCounter();
+            float frameElapsed = static_cast<float>(frameEnd - now) / static_cast<float>(freq);
+
+            // 统计平均帧渲染耗时（每60帧调整一次）
+            frameTimeAccum += frameElapsed;
             frameTimeCount++;
             if (frameTimeCount >= 60) {
                 float avgFrameTime = frameTimeAccum / static_cast<float>(frameTimeCount);
@@ -965,8 +968,8 @@ int main(int argc, char* argv[]) {
             }
 
             float targetFrameTime = 1.0f / adaptiveFPS;
-            if (timeDelta < targetFrameTime) {
-                SDL_Delay(static_cast<Uint32>((targetFrameTime - timeDelta) * 1000.0f));
+            if (frameElapsed < targetFrameTime) {
+                SDL_Delay(static_cast<Uint32>((targetFrameTime - frameElapsed) * 1000.0f));
             }
         }
     }
