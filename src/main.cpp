@@ -784,7 +784,7 @@ int main(int argc, char* argv[]) {
                                        static_cast<float>(ww.width),
                                        static_cast<float>(ww.height), mouse);
 
-                        debugUI.BeginFrame();
+                        debugUI.BeginFrame(ww.width, ww.height);
                         debugUI.RenderOverlay(debugState);
                         SDL_GL_SwapWindow(ww.window);
                     }
@@ -938,7 +938,7 @@ int main(int argc, char* argv[]) {
                                    static_cast<float>(ww.width),
                                    static_cast<float>(ww.height), localMouse);
 
-                    debugUI.BeginFrame();
+                    debugUI.BeginFrame(ww.width, ww.height);
                     debugUI.RenderOverlay(debugState);
                 }
 

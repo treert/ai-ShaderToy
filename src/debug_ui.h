@@ -48,8 +48,8 @@ public:
     /// 转发 SDL 事件给 ImGui
     void ProcessEvent(const SDL_Event& event);
 
-    /// 开始新的一帧（NewFrame）
-    void BeginFrame();
+    /// 开始新的一帧（NewFrame），可选传入当前窗口尺寸（壁纸模式多窗口用）
+    void BeginFrame(int windowWidth = 0, int windowHeight = 0);
 
     /// 绘制调试面板并提交渲染
     void Render(DebugUIState& state);

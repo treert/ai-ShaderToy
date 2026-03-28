@@ -56,10 +56,16 @@ void DebugUI::ProcessEvent(const SDL_Event& event) {
     ImGui_ImplSDL2_ProcessEvent(&event);
 }
 
-void DebugUI::BeginFrame() {
+void DebugUI::BeginFrame(int windowWidth, int windowHeight) {
     if (!initialized_) return;
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplSDL2_NewFrame();
+    // 覆盖 DisplaySize（壁纸模式多窗口时，ImGui 绑定的是第一个窗口，
+    // 需要手动设置当前渲染窗口的实际尺寸）
+    if (windowWidth > 0 && windowHeight > 0) {
+        ImGui::GetIO().DisplaySize = ImVec2(
+            static_cast<float>(windowWidth), static_cast<float>(windowHeight));
+    }
     ImGui::NewFrame();
 }
 
