@@ -59,6 +59,11 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     opengl32
 )
 
+# MSVC: 禁用 C4005（APIENTRY 宏重定义，GLAD 与 Windows SDK 冲突）
+if(MSVC)
+    target_compile_options(${PROJECT_NAME} PRIVATE /wd4005)
+endif()
+
 # 复制 assets 到构建目录
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory

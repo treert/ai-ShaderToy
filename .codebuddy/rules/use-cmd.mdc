@@ -1,0 +1,7 @@
+---
+description: 项目级规则，始终应用
+globs:
+alwaysApply: true
+---
+
+- 执行终端命令时，使用 cmd 而非 PowerShell，即通过 `cmd /c "命令"` 的方式调用。

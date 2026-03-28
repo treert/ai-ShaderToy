@@ -4,7 +4,6 @@
 
 #include <glad/glad.h>
 #include <SDL.h>
-#include <SDL_syswm.h>
 
 #include "renderer.h"
 #include "shader_manager.h"
@@ -170,7 +169,9 @@ int main(int argc, char* argv[]) {
     Uint64 freq = SDL_GetPerformanceFrequency();
     float lastFrameTime = 0.0f;
     int frameCount = 0;
-    float mouseX = 0.0f, mouseY = 0.0f;
+
+    // iMouse: xy=当前鼠标位置, zw=按下瞬间的位置（松开后取负值）
+    float mouse[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     bool mousePressed = false;
 
     while (running) {
@@ -194,18 +195,21 @@ int main(int argc, char* argv[]) {
                 }
                 break;
             case SDL_MOUSEMOTION:
-                mouseX = static_cast<float>(event.motion.x);
-                // ShaderToy 的 Y 坐标是从底部开始的
-                mouseY = static_cast<float>(config.height - event.motion.y);
+                mouse[0] = static_cast<float>(event.motion.x);
+                mouse[1] = static_cast<float>(config.height - event.motion.y);
                 break;
             case SDL_MOUSEBUTTONDOWN:
                 if (event.button.button == SDL_BUTTON_LEFT) {
                     mousePressed = true;
+                    mouse[2] = mouse[0];
+                    mouse[3] = mouse[1];
                 }
                 break;
             case SDL_MOUSEBUTTONUP:
                 if (event.button.button == SDL_BUTTON_LEFT) {
                     mousePressed = false;
+                    mouse[2] = -mouse[2];
+                    mouse[3] = -mouse[3];
                 }
                 break;
             }
@@ -217,9 +221,20 @@ int main(int argc, char* argv[]) {
         float timeDelta = currentTime - lastFrameTime;
         lastFrameTime = currentTime;
 
+        // iDate: 年/月/日/当天已过秒数
+        time_t rawTime = std::time(nullptr);
+        struct tm localTm;
+        localtime_s(&localTm, &rawTime);
+        float date[4] = {
+            static_cast<float>(localTm.tm_year + 1900),
+            static_cast<float>(localTm.tm_mon),       // 0-11，与 ShaderToy 一致
+            static_cast<float>(localTm.tm_mday),
+            static_cast<float>(localTm.tm_hour * 3600 + localTm.tm_min * 60 + localTm.tm_sec)
+        };
+
         // 渲染
         renderer.RenderFrame(shader, currentTime, timeDelta, frameCount,
-                            mouseX, mouseY, mousePressed);
+                            mouse, date);
 
         SDL_GL_SwapWindow(window);
         frameCount++;

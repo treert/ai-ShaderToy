@@ -18,9 +18,10 @@ public:
     void SetViewport(int width, int height);
 
     /// 渲染一帧
+    /// @param mouse  iMouse 四分量：xy=当前位置, zw=按下瞬间位置(松开后为负)
+    /// @param date   iDate 四分量：年/月/日/当天已过秒数
     void RenderFrame(ShaderManager& shader, float time, float timeDelta,
-                     int frame, float mouseX, float mouseY,
-                     bool mousePressed);
+                     int frame, const float mouse[4], const float date[4]);
 
 private:
     /// 创建全屏四边形的 VAO/VBO

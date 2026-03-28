@@ -22,7 +22,7 @@ public:
     /// 获取 OpenGL program ID
     GLuint GetProgram() const { return program_; }
 
-    /// 获取 uniform location（带缓存）
+    /// 获取 uniform location
     GLint GetUniformLocation(const char* name) const;
 
     /// 获取最近的编译/链接错误信息

@@ -32,8 +32,7 @@ void Renderer::SetViewport(int width, int height) {
 }
 
 void Renderer::RenderFrame(ShaderManager& shader, float time, float timeDelta,
-                           int frame, float mouseX, float mouseY,
-                           bool mousePressed) {
+                           int frame, const float mouse[4], const float date[4]) {
     glClear(GL_COLOR_BUFFER_BIT);
 
     shader.Use();
@@ -46,9 +45,9 @@ void Renderer::RenderFrame(ShaderManager& shader, float time, float timeDelta,
     glUniform1f(shader.GetUniformLocation("iTimeDelta"), timeDelta);
     glUniform1i(shader.GetUniformLocation("iFrame"), frame);
     glUniform4f(shader.GetUniformLocation("iMouse"),
-                mouseX, mouseY,
-                mousePressed ? mouseX : 0.0f,
-                mousePressed ? mouseY : 0.0f);
+                mouse[0], mouse[1], mouse[2], mouse[3]);
+    glUniform4f(shader.GetUniformLocation("iDate"),
+                date[0], date[1], date[2], date[3]);
 
     // 绘制全屏四边形
     glBindVertexArray(vao_);
