@@ -39,7 +39,8 @@ struct AppConfig {
     bool        hotReload = true;
     int         width  = kDefaultWidth;
     int         height = kDefaultHeight;
-    int         targetFPS = 60;
+    int         targetFPS = -1;      // -1 表示未指定，壁纸模式默认30，窗口模式默认60
+    float       renderScale = 0.0f;  // 渲染分辨率缩放，0=自动（壁纸模式0.5，窗口模式1.0）
 };
 
 /// 确保有控制台可以输出（WIN32 子系统默认没有控制台）
@@ -71,7 +72,8 @@ static void PrintUsage(const char* programName) {
               << "  --no-hotreload       Disable shader hot reload\n"
               << "  --width <n>          Window width (default: " << kDefaultWidth << ")\n"
               << "  --height <n>         Window height (default: " << kDefaultHeight << ")\n"
-              << "  --fps <n>            Target FPS (default: 60)\n"
+              << "  --fps <n>            Target FPS (wallpaper default: 30, window default: 60)\n"
+              << "  --renderscale <f>    Render resolution scale 0.0-1.0 (wallpaper default: 0.5, window default: 1.0)\n"
               << "  --help, -h           Show this help\n";
 }
 
@@ -110,6 +112,10 @@ static AppConfig ParseArgs(int argc, char* argv[]) {
             config.height = std::atoi(argv[++i]);
         } else if (arg == "--fps" && i + 1 < argc) {
             config.targetFPS = std::atoi(argv[++i]);
+        } else if (arg == "--renderscale" && i + 1 < argc) {
+            config.renderScale = static_cast<float>(std::atof(argv[++i]));
+            if (config.renderScale < 0.1f) config.renderScale = 0.1f;
+            if (config.renderScale > 1.0f) config.renderScale = 1.0f;
         } else if (arg == "--help" || arg == "-h") {
             PrintUsage(argv[0]);
             exit(0);
@@ -251,7 +257,109 @@ int main(int argc, char* argv[]) {
 
     std::cout << "OpenGL " << glGetString(GL_VERSION) << std::endl;
     std::cout << "Renderer: " << glGetString(GL_RENDERER) << std::endl;
-    SDL_GL_SetSwapInterval(1);
+
+    // 应用模式相关的默认值
+    if (config.targetFPS < 0) {
+        config.targetFPS = config.wallpaperMode ? 30 : 60;
+    }
+    if (config.renderScale <= 0.0f) {
+        config.renderScale = config.wallpaperMode ? 0.5f : 1.0f;
+    }
+
+    // 壁纸模式关闭 VSync，用 SDL_Delay 控制帧率（避免 VSync 强制 60fps 导致降帧参数无效）
+    SDL_GL_SetSwapInterval(config.wallpaperMode ? 0 : 1);
+
+    std::cout << "Target FPS: " << config.targetFPS
+              << ", Render scale: " << config.renderScale << std::endl;
+
+    // ============================================================
+    // 降分辨率渲染 FBO（renderScale < 1.0 时启用）
+    // ============================================================
+    GLuint renderFBO = 0, renderTex = 0;
+    int renderWidth = config.width, renderHeight = config.height;
+    bool useScaledRender = (config.renderScale < 1.0f);
+
+    // 用于 blit FBO 到屏幕的简单着色器
+    GLuint blitProgram = 0, blitVAO = 0, blitVBO = 0;
+
+    auto CreateRenderFBO = [&](int w, int h) {
+        renderWidth = static_cast<int>(w * config.renderScale);
+        renderHeight = static_cast<int>(h * config.renderScale);
+        if (renderWidth < 1) renderWidth = 1;
+        if (renderHeight < 1) renderHeight = 1;
+
+        if (renderFBO) {
+            glDeleteFramebuffers(1, &renderFBO);
+            glDeleteTextures(1, &renderTex);
+        }
+        glGenFramebuffers(1, &renderFBO);
+        glGenTextures(1, &renderTex);
+
+        glBindTexture(GL_TEXTURE_2D, renderTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, renderWidth, renderHeight, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, renderFBO);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, renderTex, 0);
+
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            std::cerr << "Render FBO incomplete!" << std::endl;
+            useScaledRender = false;
+        }
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    };
+
+    if (useScaledRender) {
+        // 创建 blit 着色器
+        const char* blitVS =
+            "#version 330 core\n"
+            "layout(location=0) in vec2 aPos;\n"
+            "out vec2 vUV;\n"
+            "void main(){\n"
+            "  vUV = aPos * 0.5 + 0.5;\n"
+            "  gl_Position = vec4(aPos, 0.0, 1.0);\n"
+            "}\n";
+        const char* blitFS =
+            "#version 330 core\n"
+            "in vec2 vUV;\n"
+            "out vec4 fragColor;\n"
+            "uniform sampler2D uTex;\n"
+            "void main(){\n"
+            "  fragColor = texture(uTex, vUV);\n"
+            "}\n";
+
+        GLuint vs = glCreateShader(GL_VERTEX_SHADER);
+        glShaderSource(vs, 1, &blitVS, nullptr);
+        glCompileShader(vs);
+        GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
+        glShaderSource(fs, 1, &blitFS, nullptr);
+        glCompileShader(fs);
+        blitProgram = glCreateProgram();
+        glAttachShader(blitProgram, vs);
+        glAttachShader(blitProgram, fs);
+        glLinkProgram(blitProgram);
+        glDeleteShader(vs);
+        glDeleteShader(fs);
+
+        // blit 全屏四边形
+        float blitQuad[] = {-1,-1, 1,-1, -1,1, 1,-1, 1,1, -1,1};
+        glGenVertexArrays(1, &blitVAO);
+        glGenBuffers(1, &blitVBO);
+        glBindVertexArray(blitVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, blitVBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(blitQuad), blitQuad, GL_STATIC_DRAW);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+        glEnableVertexAttribArray(0);
+        glBindVertexArray(0);
+
+        CreateRenderFBO(config.width, config.height);
+        std::cout << "Scaled rendering: " << renderWidth << "x" << renderHeight
+                  << " (scale=" << config.renderScale << ")" << std::endl;
+    }
 
     // ============================================================
     // 初始化渲染器
@@ -412,6 +520,9 @@ int main(int argc, char* argv[]) {
                     config.width = event.window.data1;
                     config.height = event.window.data2;
                     renderer.SetViewport(config.width, config.height);
+                    if (useScaledRender) {
+                        CreateRenderFBO(config.width, config.height);
+                    }
                 }
                 break;
             case SDL_MOUSEMOTION:
@@ -539,7 +650,6 @@ int main(int argc, char* argv[]) {
             // 壁纸模式：依次渲染每个显示器窗口，鼠标坐标转局部
             for (auto& ww : wallpaperWindows) {
                 SDL_GL_MakeCurrent(ww.window, glContext);
-                renderer.SetViewport(ww.width, ww.height);
 
                 // 将全局屏幕坐标转为当前窗口的局部坐标（ShaderToy Y 从底部开始）
                 float localMouse[4];
@@ -568,20 +678,85 @@ int main(int argc, char* argv[]) {
                     localMouse[3] = 0.0f;
                 }
 
-                // 设置每个窗口独立的 iResolution
-                shader.Use();
-                glUniform3f(shader.GetUniformLocation("iResolution"),
-                            static_cast<float>(ww.width),
-                            static_cast<float>(ww.height), 1.0f);
+                if (useScaledRender) {
+                    // 降分辨率渲染到 FBO
+                    int scaledW = static_cast<int>(ww.width * config.renderScale);
+                    int scaledH = static_cast<int>(ww.height * config.renderScale);
+                    if (scaledW != renderWidth || scaledH != renderHeight) {
+                        CreateRenderFBO(ww.width, ww.height);
+                    }
 
-                renderer.RenderFrame(shader, currentTime, timeDelta, frameCount,
-                                    localMouse, date);
+                    glBindFramebuffer(GL_FRAMEBUFFER, renderFBO);
+                    renderer.SetViewport(renderWidth, renderHeight);
+
+                    // iResolution 设为缩放后的分辨率
+                    shader.Use();
+                    glUniform3f(shader.GetUniformLocation("iResolution"),
+                                static_cast<float>(renderWidth),
+                                static_cast<float>(renderHeight), 1.0f);
+
+                    // 鼠标坐标也按比例缩放
+                    float scaledMouse[4] = {
+                        localMouse[0] * config.renderScale,
+                        localMouse[1] * config.renderScale,
+                        localMouse[2] * config.renderScale,
+                        localMouse[3] * config.renderScale
+                    };
+
+                    renderer.RenderFrame(shader, currentTime, timeDelta, frameCount,
+                                        scaledMouse, date);
+
+                    // Blit FBO 到屏幕
+                    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                    renderer.SetViewport(ww.width, ww.height);
+                    glUseProgram(blitProgram);
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, renderTex);
+                    glUniform1i(glGetUniformLocation(blitProgram, "uTex"), 0);
+                    glBindVertexArray(blitVAO);
+                    glDrawArrays(GL_TRIANGLES, 0, 6);
+                    glBindVertexArray(0);
+                } else {
+                    renderer.SetViewport(ww.width, ww.height);
+
+                    // 设置每个窗口独立的 iResolution
+                    shader.Use();
+                    glUniform3f(shader.GetUniformLocation("iResolution"),
+                                static_cast<float>(ww.width),
+                                static_cast<float>(ww.height), 1.0f);
+
+                    renderer.RenderFrame(shader, currentTime, timeDelta, frameCount,
+                                        localMouse, date);
+                }
                 SDL_GL_SwapWindow(ww.window);
             }
         } else {
             // 窗口模式
-            renderer.RenderFrame(shader, currentTime, timeDelta, frameCount,
-                                mouse, date);
+            if (useScaledRender) {
+                int scaledW = static_cast<int>(config.width * config.renderScale);
+                int scaledH = static_cast<int>(config.height * config.renderScale);
+                if (scaledW != renderWidth || scaledH != renderHeight) {
+                    CreateRenderFBO(config.width, config.height);
+                }
+
+                glBindFramebuffer(GL_FRAMEBUFFER, renderFBO);
+                renderer.SetViewport(renderWidth, renderHeight);
+                renderer.RenderFrame(shader, currentTime, timeDelta, frameCount,
+                                    mouse, date);
+
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                renderer.SetViewport(config.width, config.height);
+                glUseProgram(blitProgram);
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, renderTex);
+                glUniform1i(glGetUniformLocation(blitProgram, "uTex"), 0);
+                glBindVertexArray(blitVAO);
+                glDrawArrays(GL_TRIANGLES, 0, 6);
+                glBindVertexArray(0);
+            } else {
+                renderer.RenderFrame(shader, currentTime, timeDelta, frameCount,
+                                    mouse, date);
+            }
             SDL_GL_SwapWindow(window);
         }
         frameCount++;
@@ -619,6 +794,11 @@ int main(int argc, char* argv[]) {
     // ============================================================
     watcher.Stop();
     tray.Destroy();
+
+    // 释放降分辨率渲染资源
+    if (renderFBO) { glDeleteFramebuffers(1, &renderFBO); glDeleteTextures(1, &renderTex); }
+    if (blitProgram) glDeleteProgram(blitProgram);
+    if (blitVAO) { glDeleteVertexArrays(1, &blitVAO); glDeleteBuffers(1, &blitVBO); }
 
     if (config.wallpaperMode) {
         Wallpaper::Restore();
