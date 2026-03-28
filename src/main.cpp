@@ -293,6 +293,7 @@ int main(int argc, char* argv[]) {
     // iMouse: xy=当前鼠标位置, zw=按下瞬间的位置（松开后取负值）
     float mouse[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     bool mousePressed = false;
+    float clickTime = -10.0f;  // 最近一次点击的 iTime，初始设为远过去
 
     while (running) {
         // 事件处理
@@ -327,6 +328,9 @@ int main(int argc, char* argv[]) {
                     mousePressed = true;
                     mouse[2] = mouse[0];
                     mouse[3] = mouse[1];
+                    // 记录点击时间
+                    Uint64 clickNow = SDL_GetPerformanceCounter();
+                    clickTime = static_cast<float>(clickNow - startTime) / static_cast<float>(freq);
                 }
                 break;
             case SDL_MOUSEBUTTONUP:
@@ -338,6 +342,31 @@ int main(int argc, char* argv[]) {
                 break;
             }
         }
+
+        // 壁纸模式：SDL 收不到鼠标事件，改用 Win32 全局鼠标状态
+#ifdef _WIN32
+        if (config.wallpaperMode) {
+            POINT pt;
+            GetCursorPos(&pt);
+            mouse[0] = static_cast<float>(pt.x);
+            mouse[1] = static_cast<float>(config.height - pt.y);
+
+            bool leftDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+            if (leftDown && !mousePressed) {
+                // 刚按下
+                mousePressed = true;
+                mouse[2] = mouse[0];
+                mouse[3] = mouse[1];
+                Uint64 clickNow = SDL_GetPerformanceCounter();
+                clickTime = static_cast<float>(clickNow - startTime) / static_cast<float>(freq);
+            } else if (!leftDown && mousePressed) {
+                // 刚松开
+                mousePressed = false;
+                mouse[2] = -mouse[2];
+                mouse[3] = -mouse[3];
+            }
+        }
+#endif
 
         // 热加载：重新编译 shader
         if (shaderNeedsReload.exchange(false)) {
@@ -407,6 +436,7 @@ int main(int argc, char* argv[]) {
         float channelRes[4][3];
         textures.GetAllResolutions(channelRes);
         glUniform3fv(shader.GetUniformLocation("iChannelResolution"), 4, &channelRes[0][0]);
+        glUniform1f(shader.GetUniformLocation("iClickTime"), clickTime);
 
         // 渲染
         renderer.RenderFrame(shader, currentTime, timeDelta, frameCount,

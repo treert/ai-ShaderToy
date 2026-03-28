@@ -102,6 +102,7 @@ uniform sampler2D iChannel1;            // 输入通道 1
 uniform sampler2D iChannel2;            // 输入通道 2
 uniform sampler2D iChannel3;            // 输入通道 3
 uniform vec3      iChannelResolution[4]; // 各通道分辨率
+uniform float     iClickTime;           // 最近一次点击的时间 (seconds)
 
 out vec4 _fragColor_out;
 
