@@ -1,0 +1,19 @@
+{
+    "image": {
+        "iChannel0": "buf_c"
+    },
+    "buf_a": {
+        "iChannel0": {
+            "path": "/media/a/94284d43be78f00eb6b298e6d78656a1b34e2b91b34940d02f1ca8b22310e8a0.png",
+            "type": "cubemap"
+        }
+    },
+    "buf_b": {
+        "iChannel0": "buf_a"
+    },
+    "buf_c": {
+        "iChannel0": "buf_a",
+        "iChannel1": "buf_b",
+        "iChannel2": "buf_c"
+    }
+}
