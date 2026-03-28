@@ -30,9 +30,30 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(glad)
 
+# Dear ImGui
+FetchContent_Declare(
+    imgui
+    GIT_REPOSITORY https://github.com/ocornut/imgui.git
+    GIT_TAG        v1.91.8-docking
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(imgui)
+
 # ============================================================
 # 主程序
 # ============================================================
+
+# Dear ImGui 源文件（核心 + SDL2/OpenGL3 后端）
+set(IMGUI_SOURCES
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    ${imgui_SOURCE_DIR}/imgui_demo.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl2.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+)
+
 set(SOURCES
     src/main.cpp
     src/renderer.cpp
@@ -42,7 +63,9 @@ set(SOURCES
     src/multi_pass.cpp
     src/file_watcher.cpp
     src/tray_icon.cpp
+    src/debug_ui.cpp
     src/app.rc
+    ${IMGUI_SOURCES}
 )
 
 set(HEADERS
@@ -53,6 +76,7 @@ set(HEADERS
     src/multi_pass.h
     src/file_watcher.h
     src/tray_icon.h
+    src/debug_ui.h
     src/stb_image.h
 )
 
@@ -60,6 +84,8 @@ add_executable(${PROJECT_NAME} WIN32 ${SOURCES} ${HEADERS})
 
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${imgui_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}/backends
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE

@@ -7,6 +7,7 @@
 #include <mutex>
 #include <algorithm>
 #include <array>
+#include <filesystem>
 
 #include <glad/glad.h>
 #include <SDL.h>
@@ -18,6 +19,7 @@
 #include "multi_pass.h"
 #include "file_watcher.h"
 #include "tray_icon.h"
+#include "debug_ui.h"
 
 // 默认参数
 static const int    kDefaultWidth  = 800;
@@ -449,7 +451,40 @@ int main(int argc, char* argv[]) {
     if (config.wallpaperMode) {
         std::cout << "Running in wallpaper mode." << std::endl;
     } else {
-        std::cout << "Running in window mode. Press ESC to exit, F5 to reload shader." << std::endl;
+        std::cout << "Running in window mode. Press ESC to exit, F5 to reload shader, Tab to toggle debug panel." << std::endl;
+    }
+
+    // ============================================================
+    // 调试 UI（仅窗口模式）
+    // ============================================================
+    DebugUI debugUI;
+    DebugUIState debugState;
+    std::string lastShaderError;
+
+    // 扫描 assets/shaders/ 目录获取所有 .glsl 文件
+    auto ScanShaderFiles = [&]() {
+        debugState.shaderFiles.clear();
+        const std::string shaderDir = "assets/shaders";
+        std::error_code ec;
+        if (std::filesystem::exists(shaderDir, ec)) {
+            for (const auto& entry : std::filesystem::directory_iterator(shaderDir, ec)) {
+                if (entry.is_regular_file() && entry.path().extension() == ".glsl") {
+                    // 使用正斜杠路径，与项目惯例一致
+                    std::string path = entry.path().generic_string();
+                    debugState.shaderFiles.push_back(path);
+                }
+            }
+            std::sort(debugState.shaderFiles.begin(), debugState.shaderFiles.end());
+        }
+    };
+
+    if (!config.wallpaperMode) {
+        if (!debugUI.Init(window, glContext)) {
+            std::cerr << "DebugUI init failed, continuing without debug panel." << std::endl;
+        }
+        ScanShaderFiles();
+        debugState.targetFPS = config.targetFPS;
+        debugState.renderScale = config.renderScale;
     }
 
     // ============================================================
@@ -507,12 +542,19 @@ int main(int argc, char* argv[]) {
         while (SDL_PollEvent(&event)) {
             tray.HandleEvent(event);
 
+            // ImGui 事件转发（始终转发，让 ImGui 跟踪状态）
+            if (!config.wallpaperMode) {
+                debugUI.ProcessEvent(event);
+            }
+
             switch (event.type) {
             case SDL_QUIT:
                 running = false;
                 break;
             case SDL_KEYDOWN:
-                if (event.key.keysym.sym == SDLK_ESCAPE) {
+                if (event.key.keysym.sym == SDLK_TAB && !config.wallpaperMode) {
+                    debugUI.Toggle();
+                } else if (event.key.keysym.sym == SDLK_ESCAPE) {
                     running = false;
                 } else if (event.key.keysym.sym == SDLK_F5) {
                     shaderNeedsReload = true;
@@ -529,10 +571,13 @@ int main(int argc, char* argv[]) {
                 }
                 break;
             case SDL_MOUSEMOTION:
+                // ImGui 想捕获鼠标时，不更新 shader 的 iMouse
+                if (!config.wallpaperMode && debugUI.WantCaptureMouse()) break;
                 mouse[0] = static_cast<float>(event.motion.x);
                 mouse[1] = static_cast<float>(config.height - event.motion.y);
                 break;
             case SDL_MOUSEBUTTONDOWN:
+                if (!config.wallpaperMode && debugUI.WantCaptureMouse()) break;
                 if (event.button.button == SDL_BUTTON_LEFT) {
                     mousePressed = true;
                     mouse[2] = mouse[0];
@@ -543,6 +588,7 @@ int main(int argc, char* argv[]) {
                 }
                 break;
             case SDL_MOUSEBUTTONUP:
+                if (!config.wallpaperMode && debugUI.WantCaptureMouse()) break;
                 if (event.button.button == SDL_BUTTON_LEFT) {
                     mousePressed = false;
                     mouse[2] = -mouse[2];
@@ -577,21 +623,135 @@ int main(int argc, char* argv[]) {
         }
 #endif
 
+        // 处理 DebugUI 控制请求
+        if (!config.wallpaperMode) {
+            // shader 切换请求
+            if (!debugState.requestSwitchShader.empty()) {
+                config.shaderPath = debugState.requestSwitchShader;
+                debugState.requestSwitchShader.clear();
+                shaderNeedsReload = true;
+                // 更新 FileWatcher
+                if (config.hotReload) {
+                    watcher.Stop();
+                    watcher.Watch(config.shaderPath, [&](const std::string&) {
+                        shaderNeedsReload.store(true);
+                    });
+                }
+            }
+            // 重载请求
+            if (debugState.requestReload) {
+                shaderNeedsReload = true;
+                debugState.requestReload = false;
+            }
+            // 时间重置请求
+            if (debugState.requestResetTime) {
+                startTime = SDL_GetPerformanceCounter();
+                frameCount = 0;
+                lastFrameTime = 0.0f;
+                debugState.requestResetTime = false;
+            }
+            // 暂停状态同步（DebugUI → paused）
+            paused = debugState.paused;
+            // FPS 调节
+            if (debugState.targetFPS != config.targetFPS) {
+                config.targetFPS = debugState.targetFPS;
+                adaptiveFPS = static_cast<float>(config.targetFPS);
+                frameTimeAccum = 0.0f;
+                frameTimeCount = 0;
+            }
+            // renderScale 调节
+            if (debugState.renderScale != config.renderScale) {
+                config.renderScale = debugState.renderScale;
+                bool newScaled = (config.renderScale < 1.0f);
+                if (newScaled && !useScaledRender) {
+                    // 需要创建 blit 资源（首次启用降分辨率）
+                    // 简化处理：标记 useScaledRender，FBO 在渲染时按需创建
+                    useScaledRender = true;
+                    if (!blitProgram) {
+                        const char* blitVS =
+                            "#version 330 core\n"
+                            "layout(location=0) in vec2 aPos;\n"
+                            "out vec2 vUV;\n"
+                            "void main(){\n"
+                            "  vUV = aPos * 0.5 + 0.5;\n"
+                            "  gl_Position = vec4(aPos, 0.0, 1.0);\n"
+                            "}\n";
+                        const char* blitFS =
+                            "#version 330 core\n"
+                            "in vec2 vUV;\n"
+                            "out vec4 fragColor;\n"
+                            "uniform sampler2D uTex;\n"
+                            "void main(){\n"
+                            "  fragColor = texture(uTex, vUV);\n"
+                            "}\n";
+                        GLuint vs = glCreateShader(GL_VERTEX_SHADER);
+                        glShaderSource(vs, 1, &blitVS, nullptr);
+                        glCompileShader(vs);
+                        GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
+                        glShaderSource(fs, 1, &blitFS, nullptr);
+                        glCompileShader(fs);
+                        blitProgram = glCreateProgram();
+                        glAttachShader(blitProgram, vs);
+                        glAttachShader(blitProgram, fs);
+                        glLinkProgram(blitProgram);
+                        glDeleteShader(vs);
+                        glDeleteShader(fs);
+
+                        float blitQuad[] = {-1,-1, 1,-1, -1,1, 1,-1, 1,1, -1,1};
+                        glGenVertexArrays(1, &blitVAO);
+                        glGenBuffers(1, &blitVBO);
+                        glBindVertexArray(blitVAO);
+                        glBindBuffer(GL_ARRAY_BUFFER, blitVBO);
+                        glBufferData(GL_ARRAY_BUFFER, sizeof(blitQuad), blitQuad, GL_STATIC_DRAW);
+                        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+                        glEnableVertexAttribArray(0);
+                        glBindVertexArray(0);
+                    }
+                } else if (!newScaled) {
+                    useScaledRender = false;
+                }
+                if (useScaledRender) {
+                    CreateRenderFBO(config.width, config.height);
+                }
+            }
+        }
+
         // 热加载：重新编译 shader
         if (shaderNeedsReload.exchange(false)) {
             ShaderManager newShader;
             newShader.SetChannelTypes(config.channelTypes);
             if (newShader.LoadFromFile(config.shaderPath)) {
                 shader = std::move(newShader);
+                lastShaderError.clear();
                 std::cout << "Shader reloaded successfully." << std::endl;
             } else {
-                std::cerr << "Shader reload failed: " << newShader.GetLastError() << std::endl;
+                lastShaderError = newShader.GetLastError();
+                std::cerr << "Shader reload failed: " << lastShaderError << std::endl;
             }
         }
 
-        // 暂停时跳过渲染
+        // 暂停时跳过 shader 渲染，但仍渲染 DebugUI
         if (paused) {
-            SDL_Delay(100);
+            if (!config.wallpaperMode) {
+                // 填充 DebugUI 状态
+                debugState.fps = 0.0f;
+                debugState.adaptiveFPS = adaptiveFPS;
+                debugState.currentTime = lastFrameTime;
+                debugState.timeDelta = 0.0f;
+                debugState.frameCount = frameCount;
+                debugState.resolution[0] = static_cast<float>(config.width);
+                debugState.resolution[1] = static_cast<float>(config.height);
+                std::copy(std::begin(mouse), std::end(mouse), std::begin(debugState.mouse));
+                debugState.shaderPath = config.shaderPath.c_str();
+                debugState.shaderError = lastShaderError.c_str();
+                debugState.paused = paused.load();
+
+                debugUI.BeginFrame();
+                debugUI.Render(debugState);
+                SDL_GL_SwapWindow(window);
+            } else {
+                SDL_Delay(100);
+            }
             continue;
         }
 
@@ -760,6 +920,25 @@ int main(int argc, char* argv[]) {
                 renderer.RenderFrame(shader, currentTime, timeDelta, frameCount,
                                     mouse, date);
             }
+
+            // DebugUI 渲染（在 shader 渲染后、SwapWindow 前）
+            {
+                debugState.fps = (timeDelta > 0.0f) ? (1.0f / timeDelta) : 0.0f;
+                debugState.adaptiveFPS = adaptiveFPS;
+                debugState.currentTime = currentTime;
+                debugState.timeDelta = timeDelta;
+                debugState.frameCount = frameCount;
+                debugState.resolution[0] = static_cast<float>(config.width);
+                debugState.resolution[1] = static_cast<float>(config.height);
+                std::copy(std::begin(mouse), std::end(mouse), std::begin(debugState.mouse));
+                debugState.shaderPath = config.shaderPath.c_str();
+                debugState.shaderError = lastShaderError.c_str();
+                debugState.paused = paused.load();
+
+                debugUI.BeginFrame();
+                debugUI.Render(debugState);
+            }
+
             SDL_GL_SwapWindow(window);
         }
         frameCount++;
@@ -797,6 +976,7 @@ int main(int argc, char* argv[]) {
     // ============================================================
     watcher.Stop();
     tray.Destroy();
+    debugUI.Shutdown();
 
     // 释放降分辨率渲染资源
     if (renderFBO) { glDeleteFramebuffers(1, &renderFBO); glDeleteTextures(1, &renderTex); }
