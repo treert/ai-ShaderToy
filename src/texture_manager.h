@@ -38,6 +38,9 @@ public:
     /// 指定通道是否已加载纹理
     bool HasTexture(int channel) const;
 
+    /// 清除所有纹理（释放 owned 纹理的 GL 资源）
+    void Clear();
+
     /// 获取通道的采样器类型
     ChannelType GetChannelType(int channel) const;
 

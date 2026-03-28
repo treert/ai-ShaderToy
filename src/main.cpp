@@ -357,61 +357,66 @@ int main(int argc, char* argv[]) {
     // 加载纹理
     // ============================================================
     TextureManager textures;
-    const auto& projData = project.GetData();
 
-    // 单文件模式：使用命令行 --channel0~3 参数
-    // 仅当 imagePass 没有任何通道绑定时才走命令行参数（真正的单 .glsl 文件）
-    bool hasChannelBindings = false;
-    for (int i = 0; i < 4; ++i) {
-        if (projData.imagePass.channels[i].source != ChannelBinding::Source::None) {
-            hasChannelBindings = true;
-            break;
-        }
-    }
-    if (!hasChannelBindings && !projData.isMultiPass && projData.commonSource.empty()) {
-        std::string channelPaths[4] = {config.channel0, config.channel1, config.channel2, config.channel3};
+    // 辅助函数：根据项目数据加载纹理（初始化和 shader 切换时都调用）
+    auto LoadTexturesForProject = [&](const ShaderProjectData& data) {
+        textures.Clear();
+
+        // 单文件模式：使用命令行 --channel0~3 参数
+        // 仅当 imagePass 没有任何通道绑定时才走命令行参数（真正的单 .glsl 文件）
+        bool hasChannelBindings = false;
         for (int i = 0; i < 4; ++i) {
-            if (channelPaths[i].empty()) continue;
-            if (config.channelTypes[i] == ChannelType::CubeMap) {
-                textures.LoadCubeMap(i, channelPaths[i]);
-            } else {
-                textures.LoadTexture(i, channelPaths[i]);
+            if (data.imagePass.channels[i].source != ChannelBinding::Source::None) {
+                hasChannelBindings = true;
+                break;
             }
         }
-    } else {
-        // JSON/目录模式：从项目数据中加载外部纹理
-        auto extPaths = projData.GetExternalTexturePaths();
-        // 收集所有 pass 的外部纹理通道绑定
-        auto loadPassTextures = [&](const PassData& pass) {
+        if (!hasChannelBindings && !data.isMultiPass && data.commonSource.empty()) {
+            std::string channelPaths[4] = {config.channel0, config.channel1, config.channel2, config.channel3};
             for (int i = 0; i < 4; ++i) {
-                const auto& ch = pass.channels[i];
-                if (ch.source == ChannelBinding::Source::ExternalTexture && !ch.texturePath.empty()) {
-                    if (!textures.HasTexture(i)) {
-                        if (ch.textureType == ChannelType::CubeMap) {
-                            textures.LoadCubeMap(i, ch.texturePath);
-                        } else {
-                            textures.LoadTexture(i, ch.texturePath);
+                if (channelPaths[i].empty()) continue;
+                if (config.channelTypes[i] == ChannelType::CubeMap) {
+                    textures.LoadCubeMap(i, channelPaths[i]);
+                } else {
+                    textures.LoadTexture(i, channelPaths[i]);
+                }
+            }
+        } else {
+            // JSON/目录模式：从项目数据中加载外部纹理
+            auto loadPassTextures = [&](const PassData& pass) {
+                for (int i = 0; i < 4; ++i) {
+                    const auto& ch = pass.channels[i];
+                    if (ch.source == ChannelBinding::Source::ExternalTexture && !ch.texturePath.empty()) {
+                        if (!textures.HasTexture(i)) {
+                            if (ch.textureType == ChannelType::CubeMap) {
+                                textures.LoadCubeMap(i, ch.texturePath);
+                            } else {
+                                textures.LoadTexture(i, ch.texturePath);
+                            }
                         }
                     }
                 }
+            };
+            loadPassTextures(data.imagePass);
+            for (const auto& bp : data.bufferPasses) {
+                loadPassTextures(bp);
             }
-        };
-        loadPassTextures(projData.imagePass);
-        for (const auto& bp : projData.bufferPasses) {
-            loadPassTextures(bp);
+            if (data.hasCubeMapPass) {
+                loadPassTextures(data.cubeMapPass);
+            }
         }
-        if (projData.hasCubeMapPass) {
-            loadPassTextures(projData.cubeMapPass);
-        }
-    }
 
-    // 从实际加载结果同步通道类型
-    for (int i = 0; i < 4; ++i) {
-        ChannelType actual = textures.GetChannelType(i);
-        if (actual != ChannelType::None) {
-            config.channelTypes[i] = actual;
+        // 从实际加载结果同步通道类型
+        for (int i = 0; i < 4; ++i) {
+            ChannelType actual = textures.GetChannelType(i);
+            if (actual != ChannelType::None) {
+                config.channelTypes[i] = actual;
+            }
         }
-    }
+    };
+
+    const auto& projData = project.GetData();
+    LoadTexturesForProject(projData);
 
     // ============================================================
     // 配置 MultiPassRenderer
@@ -933,18 +938,15 @@ int main(int argc, char* argv[]) {
         if (shaderNeedsReload.exchange(false)) {
             ShaderProject newProject;
             if (newProject.Load(config.shaderPath)) {
-                const auto& newData = newProject.GetData();
-                // 先备份旧状态，尝试用新数据配置
-                // 使用 SetupMultiPass 直接操作 multiPass（它会先 Clear）
                 project = std::move(newProject);
+                // 重新加载纹理（新 shader 可能需要不同的纹理）
+                LoadTexturesForProject(project.GetData());
                 if (SetupMultiPass(project.GetData())) {
                     lastShaderError.clear();
                     std::cout << "Shader reloaded successfully." << std::endl;
                 } else {
                     lastShaderError = multiPass.GetLastError();
                     std::cerr << "Shader reload failed: " << lastShaderError << std::endl;
-                    // 注意：multiPass 此时已被 Clear，旧 shader 也丢失了
-                    // 这是可接受的——与原来的行为一致（编译失败时保留错误信息）
                 }
             } else {
                 lastShaderError = newProject.GetLastError();

@@ -11,10 +11,15 @@
 TextureManager::TextureManager() = default;
 
 TextureManager::~TextureManager() {
+    Clear();
+}
+
+void TextureManager::Clear() {
     for (auto& ch : channels_) {
         if (ch.texture && ch.isOwned) {
             glDeleteTextures(1, &ch.texture);
         }
+        ch = {};
     }
 }
 
