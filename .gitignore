@@ -30,7 +30,7 @@ cmake_install.cmake
 Makefile
 
 # 依赖
-third_party/
+# third_party/ 由 git submodule 管理，不要忽略
 external/
 
 # 系统文件

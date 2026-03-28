@@ -5,49 +5,70 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ============================================================
-# 依赖：使用 FetchContent 自动下载 SDL2 和 GLAD
+# 依赖：优先使用本地 third_party/ submodule，不存在则回退 FetchContent
 # ============================================================
 include(FetchContent)
+set(THIRD_PARTY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 
-# SDL2
-FetchContent_Declare(
-    SDL2
-    GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-    GIT_TAG        release-2.30.12
-    GIT_SHALLOW    TRUE
-)
+# --- SDL2 ---
 set(SDL_SHARED OFF CACHE BOOL "" FORCE)
 set(SDL_STATIC ON  CACHE BOOL "" FORCE)
 set(SDL_TEST   OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(SDL2)
+if(EXISTS ${THIRD_PARTY_DIR}/SDL2/CMakeLists.txt)
+    message(STATUS "SDL2: using local submodule")
+    add_subdirectory(${THIRD_PARTY_DIR}/SDL2 ${CMAKE_BINARY_DIR}/_deps/sdl2-build)
+else()
+    message(STATUS "SDL2: FetchContent fallback")
+    FetchContent_Declare(SDL2
+        GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+        GIT_TAG        release-2.30.12
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(SDL2)
+endif()
 
-# GLAD (OpenGL 3.3 Core)
-FetchContent_Declare(
-    glad
-    GIT_REPOSITORY https://github.com/Dav1dde/glad.git
-    GIT_TAG        v0.1.36
-    GIT_SHALLOW    TRUE
-)
-FetchContent_MakeAvailable(glad)
+# --- GLAD (OpenGL 3.3 Core) ---
+if(EXISTS ${THIRD_PARTY_DIR}/glad/CMakeLists.txt)
+    message(STATUS "GLAD: using local submodule")
+    add_subdirectory(${THIRD_PARTY_DIR}/glad ${CMAKE_BINARY_DIR}/_deps/glad-build)
+else()
+    message(STATUS "GLAD: FetchContent fallback")
+    FetchContent_Declare(glad
+        GIT_REPOSITORY https://github.com/Dav1dde/glad.git
+        GIT_TAG        v0.1.36
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(glad)
+endif()
 
-# Dear ImGui
-FetchContent_Declare(
-    imgui
-    GIT_REPOSITORY https://github.com/ocornut/imgui.git
-    GIT_TAG        v1.91.8-docking
-    GIT_SHALLOW    TRUE
-)
-FetchContent_MakeAvailable(imgui)
+# --- Dear ImGui (手动编译，无 CMakeLists.txt) ---
+if(EXISTS ${THIRD_PARTY_DIR}/imgui/imgui.cpp)
+    message(STATUS "ImGui: using local submodule")
+    set(imgui_SOURCE_DIR ${THIRD_PARTY_DIR}/imgui)
+else()
+    message(STATUS "ImGui: FetchContent fallback")
+    FetchContent_Declare(imgui
+        GIT_REPOSITORY https://github.com/ocornut/imgui.git
+        GIT_TAG        v1.91.8-docking
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(imgui)
+endif()
 
-# nlohmann/json (header-only JSON 解析库，用于 ShaderToy JSON 导入)
-FetchContent_Declare(
-    nlohmann_json
-    GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG        v3.11.3
-    GIT_SHALLOW    TRUE
-)
+# --- nlohmann/json ---
 set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(nlohmann_json)
+if(EXISTS ${THIRD_PARTY_DIR}/json/CMakeLists.txt)
+    message(STATUS "nlohmann/json: using local submodule")
+    add_subdirectory(${THIRD_PARTY_DIR}/json ${CMAKE_BINARY_DIR}/_deps/nlohmann_json-build)
+else()
+    message(STATUS "nlohmann/json: FetchContent fallback")
+    FetchContent_Declare(nlohmann_json
+        GIT_REPOSITORY https://github.com/nlohmann/json.git
+        GIT_TAG        v3.11.3
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(nlohmann_json)
+endif()
 
 # ============================================================
 # 主程序

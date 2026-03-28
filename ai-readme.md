@@ -10,6 +10,7 @@
 ## 目录说明
 - `src/` — 源代码
 - `assets/` — 资源文件（着色器等）
+- `third_party/` — 第三方依赖（git submodule：SDL2、GLAD、ImGui、nlohmann/json）
 - `Docs/` — 项目知识库（技术文档，供 AI 读写，也供用户查阅）
 - `tests/` — 测试
 - `scripts/` — 脚本
