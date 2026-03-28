@@ -171,6 +171,10 @@ private:
                            const float mouse[4], const float date[4],
                            float clickTime);
 
+    /// 绑定输入纹理到 iChannel0~3 并填充 channelRes（公共逻辑，RenderSinglePass/RenderCubeMapPass 共用）
+    void BindInputTextures(const RenderPass& pass, const UniformLocations& loc,
+                           float channelRes[4][3]);
+
     /// 交换双缓冲纹理
     void SwapBuffers();
 

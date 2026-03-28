@@ -908,6 +908,12 @@ int main(int argc, char* argv[]) {
                     }
                 } else if (!newScaled) {
                     useScaledRender = false;
+                    // 释放壁纸模式下各显示器的 BlitRenderer（回收显存）
+                    if (config.wallpaperMode) {
+                        for (auto& ww : wallpaperWindows) {
+                            ww.blit.reset();
+                        }
+                    }
                 }
                 if (useScaledRender) {
                     if (config.wallpaperMode) {

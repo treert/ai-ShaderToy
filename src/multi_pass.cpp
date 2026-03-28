@@ -259,7 +259,7 @@ bool MultiPassRenderer::CreateFBO(RenderPass& pass, int width, int height) {
     glGenTextures(2, textures);
     for (int i = 0; i < 2; ++i) {
         glBindTexture(GL_TEXTURE_2D, textures[i]);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, width, height, 0,
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0,
                      GL_RGBA, GL_FLOAT, nullptr);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
@@ -364,45 +364,9 @@ void MultiPassRenderer::RenderSinglePass(RenderPass& pass, GLuint quadVAO,
     glUniform1fv(loc.iChannelTime, 4, channelTime);
     glUniform1f(loc.iClickTime, clickTime);
 
-    // 设置 iChannelResolution 和绑定输入纹理到 iChannel0~3
+    // 绑定输入纹理到 iChannel0~3 并设置 iChannelResolution
     float channelRes[4][3] = {};
-    for (int i = 0; i < 4; ++i) {
-        int input = pass.inputChannels[i];
-        glActiveTexture(GL_TEXTURE0 + i);
-
-        if (input >= 0 && input < static_cast<int>(bufferPasses_.size())) {
-            // 输入来自 buffer pass —— 使用上一帧的输出
-            glBindTexture(GL_TEXTURE_2D, bufferPasses_[input].outputTexturePrev);
-            channelRes[i][0] = static_cast<float>(bufferPasses_[input].width);
-            channelRes[i][1] = static_cast<float>(bufferPasses_[input].height);
-            channelRes[i][2] = 1.0f;
-        } else if (input == 200 && hasCubeMapPass_) {
-            // 输入来自 CubeMap pass 输出（samplerCube）
-            glBindTexture(GL_TEXTURE_CUBE_MAP, cubeMapPass_.cubeMapTexturePrev);
-            channelRes[i][0] = static_cast<float>(cubeMapPass_.width);
-            channelRes[i][1] = static_cast<float>(cubeMapPass_.height);
-            channelRes[i][2] = 1.0f;
-        } else if (input >= 100 && input <= 103) {
-            // 外部纹理
-            int extIdx = input - 100;
-            const auto& ext = externalTextures_[extIdx];
-            if (ext.textureId) {
-                GLenum target = (ext.type == ChannelType::CubeMap) ? GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D;
-                glBindTexture(target, ext.textureId);
-                channelRes[i][0] = static_cast<float>(ext.width);
-                channelRes[i][1] = static_cast<float>(ext.height);
-                channelRes[i][2] = 1.0f;
-            } else {
-                glBindTexture(GL_TEXTURE_2D, 0);
-            }
-        } else {
-            // 无输入
-            glBindTexture(GL_TEXTURE_2D, 0);
-        }
-
-        glUniform1i(loc.iChannel[i], i);
-    }
-    glUniform3fv(loc.iChannelResolution, 4, &channelRes[0][0]);
+    BindInputTextures(pass, loc, channelRes);
 
     // 绘制全屏四边形
     glBindVertexArray(quadVAO);
@@ -486,6 +450,30 @@ void MultiPassRenderer::RenderCubeMapPass(RenderPass& pass, GLuint quadVAO,
 
     // 绑定输入纹理
     float channelRes[4][3] = {};
+    BindInputTextures(pass, loc, channelRes);
+
+    // 渲染 6 个面
+    for (int face = 0; face < 6; ++face) {
+        glBindFramebuffer(GL_FRAMEBUFFER, pass.cubeFBO[face]);
+        glViewport(0, 0, pass.width, pass.height);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        // 设置面方向 uniform
+        glUniform3fv(loc.cubeFaceRight, 1, faces[face].right);
+        glUniform3fv(loc.cubeFaceUp,    1, faces[face].up);
+        glUniform3fv(loc.cubeFaceDir,   1, faces[face].dir);
+
+        // 绘制全屏四边形
+        glBindVertexArray(quadVAO);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        glBindVertexArray(0);
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void MultiPassRenderer::BindInputTextures(const RenderPass& pass, const UniformLocations& loc,
+                                           float channelRes[4][3]) {
     for (int i = 0; i < 4; ++i) {
         int input = pass.inputChannels[i];
         glActiveTexture(GL_TEXTURE0 + i);
@@ -496,10 +484,12 @@ void MultiPassRenderer::RenderCubeMapPass(RenderPass& pass, GLuint quadVAO,
             channelRes[i][1] = static_cast<float>(bufferPasses_[input].height);
             channelRes[i][2] = 1.0f;
         } else if (input == 200 && hasCubeMapPass_) {
-            // CubeMap 自引用（上一帧）
-            glBindTexture(GL_TEXTURE_CUBE_MAP, pass.cubeMapTexturePrev);
-            channelRes[i][0] = static_cast<float>(pass.width);
-            channelRes[i][1] = static_cast<float>(pass.height);
+            GLuint cubeTex = pass.isCubeMap ? pass.cubeMapTexturePrev : cubeMapPass_.cubeMapTexturePrev;
+            int cubeW = pass.isCubeMap ? pass.width : cubeMapPass_.width;
+            int cubeH = pass.isCubeMap ? pass.height : cubeMapPass_.height;
+            glBindTexture(GL_TEXTURE_CUBE_MAP, cubeTex);
+            channelRes[i][0] = static_cast<float>(cubeW);
+            channelRes[i][1] = static_cast<float>(cubeH);
             channelRes[i][2] = 1.0f;
         } else if (input >= 100 && input <= 103) {
             int extIdx = input - 100;
@@ -520,23 +510,4 @@ void MultiPassRenderer::RenderCubeMapPass(RenderPass& pass, GLuint quadVAO,
         glUniform1i(loc.iChannel[i], i);
     }
     glUniform3fv(loc.iChannelResolution, 4, &channelRes[0][0]);
-
-    // 渲染 6 个面
-    for (int face = 0; face < 6; ++face) {
-        glBindFramebuffer(GL_FRAMEBUFFER, pass.cubeFBO[face]);
-        glViewport(0, 0, pass.width, pass.height);
-        glClear(GL_COLOR_BUFFER_BIT);
-
-        // 设置面方向 uniform
-        glUniform3fv(loc.cubeFaceRight, 1, faces[face].right);
-        glUniform3fv(loc.cubeFaceUp,    1, faces[face].up);
-        glUniform3fv(loc.cubeFaceDir,   1, faces[face].dir);
-
-        // 绘制全屏四边形
-        glBindVertexArray(quadVAO);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
-        glBindVertexArray(0);
-    }
-
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
