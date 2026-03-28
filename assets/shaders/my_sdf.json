@@ -1,0 +1,34 @@
+{
+ "ver": "0.1",
+ "info": {
+  "id": "7tdGDf",
+  "date": "1636890510",
+  "viewed": 55,
+  "name": "OM SDF",
+  "description": "test signed distance function",
+  "likes": 1,
+  "published": "Public",
+  "usePreview": 0,
+  "tags": [
+   "sdf"
+  ],
+  "hasliked": 0,
+  "parentid": "",
+  "parentname": ""
+ },
+ "renderpass": [
+  {
+   "inputs": [],
+   "outputs": [
+    {
+     "id": "4dfGRr",
+     "channel": 0
+    }
+   ],
+   "code": "// 关于鼠标输入 https://www.shadertoy.com/view/Mss3zH\n// RoundMerge https://www.ronja-tutorials.com/post/035-2d-sdf-combination/\n// https://stackoverflow.com/questions/30545052/calculate-signed-distance-between-point-and-rectangle/30545544\n// https://www.shadertoy.com/view/MtBGWc\nfloat sdfRect(vec2 c, vec2 h, vec2 p){\n    vec2 v = abs(p-c);\n    vec2 u = v - h;\n    return length(max(u,0.0)) + min(0.0,max(u.x,u.y));\n}\n\nfloat sdfCircle(vec2 c, float r, vec2 p){\n     return length(p-c) - r;\n}\n\nvec2 sdfToColor(float d){\n    float m = 1.0 - abs(d)/0.2;\n    float s = sin(d*400.0) * 0.5 + 0.5;\n    return vec2(s*m*(-sign(d)*0.5+0.5),s*m*(sign(d)*0.5+0.5));\n}\n\n// https://www.ronja-tutorials.com/post/035-2d-sdf-combination/\nfloat sdfRoundMerge(float shape1,float shape2, float radius){\n    vec2 intersectionSpace = vec2(shape1 - radius, shape2 - radius);\n    intersectionSpace = min(intersectionSpace, 0.0);\n    float insideDistance = -length(intersectionSpace);\n    float simpleUnion = min(shape1, shape2);\n    float outsideDistance = max(simpleUnion, radius);\n    return  insideDistance + outsideDistance;\n}\n\nfloat sdfRoundMerge3(float d1,float d2,float d3, float radius){\n    vec3 intersectionSpace = vec3(d1 - radius, d2 - radius, d3 - radius);\n    intersectionSpace = min(intersectionSpace, 0.0);\n    float insideDistance = -length(intersectionSpace);\n    float simpleUnion = min(d1, min(d2,d3));\n    float outsideDistance = max(simpleUnion, radius);\n    return min(insideDistance + outsideDistance,0.0);\n}\n\n\nvoid mainImage( out vec4 fragColor, in vec2 fragCoord )\n{\n    // Normalized pixel coordinates (from 0 to 1)\n    vec2 uv = fragCoord/iResolution.xy;\n    float a = sin(iTime)*0.5+0.5;\n    \n    vec2 circleCenter = vec2(0.75,0.75);\n    float radius = 0.16;\n    vec2 rectCenter = vec2(0.25,0.25);\n    vec2 rectSize = vec2(0.15,0.15);\n    \n    circleCenter = mix(circleCenter, rectCenter, a);\n    \n    float r1 = sdfRect(rectCenter, rectSize, uv);\n    float c1 = sdfCircle(circleCenter, radius, uv);\n    \n    float dd = 1.0;\n    if(iMouse.z > 0.0){\n        vec2 mouseCenter = iMouse.xy / iResolution.xy;\n        float c2 = sdfCircle(mouseCenter, radius, uv);\n        dd = sdfRoundMerge3(r1,c1,c2,0.1);\n    }\n    else{\n        dd = sdfRoundMerge(r1,c1,0.2);\n    }\n    \n    fragColor = vec4(sdfToColor(dd),0,1);\n}",
+   "name": "Image",
+   "description": "",
+   "type": "image"
+  }
+ ]
+}

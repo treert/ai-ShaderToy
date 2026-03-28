@@ -109,6 +109,19 @@ void DebugUI::Render(DebugUIState& state) {
             ImGui::Text("Shader: %s", state.shaderPath);
             ImGui::Text("Status: %s",
                         (state.shaderError && state.shaderError[0] != '\0') ? "ERROR" : "OK");
+            ImGui::Text("Mode:   %s", state.isMultiPass ? "Multi-Pass" : "Single-Pass");
+            if (state.isMultiPass && !state.passNames.empty()) {
+                ImGui::Text("Passes: ");
+                ImGui::SameLine();
+                for (size_t i = 0; i < state.passNames.size(); ++i) {
+                    if (i > 0) ImGui::SameLine();
+                    ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "%s", state.passNames[i].c_str());
+                    if (i < state.passNames.size() - 1) {
+                        ImGui::SameLine();
+                        ImGui::TextUnformatted("->");
+                    }
+                }
+            }
             ImGui::Separator();
             ImGui::Text("iResolution: %.0f x %.0f", state.resolution[0], state.resolution[1]);
             ImGui::Text("iTime:      %.3f", state.currentTime);
@@ -228,6 +241,7 @@ void DebugUI::RenderOverlay(const DebugUIState& state) {
     ImGui::Text("Shader: %s", state.shaderPath);
     ImGui::Text("Status: %s",
                 (state.shaderError && state.shaderError[0] != '\0') ? "ERROR" : "OK");
+    ImGui::Text("Mode:   %s", state.isMultiPass ? "Multi-Pass" : "Single-Pass");
     ImGui::Separator();
     ImGui::Text("iResolution: %.0f x %.0f", state.resolution[0], state.resolution[1]);
     ImGui::Text("iTime:      %.3f", state.currentTime);

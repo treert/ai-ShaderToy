@@ -17,6 +17,7 @@
 #include "wallpaper.h"
 #include "texture_manager.h"
 #include "multi_pass.h"
+#include "shader_project.h"
 #include "file_watcher.h"
 #include "tray_icon.h"
 #include "debug_ui.h"
@@ -375,7 +376,7 @@ int main(int argc, char* argv[]) {
     }
 
     // ============================================================
-    // 初始化渲染器
+    // 初始化渲染器（全屏四边形 VAO，供 MultiPassRenderer 使用）
     // ============================================================
     Renderer renderer;
     if (!renderer.Init()) {
@@ -388,20 +389,59 @@ int main(int argc, char* argv[]) {
     renderer.SetViewport(config.width, config.height);
 
     // ============================================================
+    // 加载 Shader 项目（支持单文件 .glsl / JSON / 目录三种模式）
+    // ============================================================
+    ShaderProject project;
+    if (!project.Load(config.shaderPath)) {
+        std::cerr << "Failed to load shader project: " << project.GetLastError() << std::endl;
+        SDL_GL_DeleteContext(glContext);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
+
+    // ============================================================
     // 加载纹理
     // ============================================================
     TextureManager textures;
-    std::string channelPaths[4] = {config.channel0, config.channel1, config.channel2, config.channel3};
-    for (int i = 0; i < 4; ++i) {
-        if (channelPaths[i].empty()) continue;
-        if (config.channelTypes[i] == ChannelType::CubeMap) {
-            textures.LoadCubeMap(i, channelPaths[i]);
-        } else {
-            textures.LoadTexture(i, channelPaths[i]);
+    const auto& projData = project.GetData();
+
+    // 单文件模式：使用命令行 --channel0~3 参数
+    if (!projData.isMultiPass && projData.commonSource.empty()) {
+        std::string channelPaths[4] = {config.channel0, config.channel1, config.channel2, config.channel3};
+        for (int i = 0; i < 4; ++i) {
+            if (channelPaths[i].empty()) continue;
+            if (config.channelTypes[i] == ChannelType::CubeMap) {
+                textures.LoadCubeMap(i, channelPaths[i]);
+            } else {
+                textures.LoadTexture(i, channelPaths[i]);
+            }
+        }
+    } else {
+        // JSON/目录模式：从项目数据中加载外部纹理
+        auto extPaths = projData.GetExternalTexturePaths();
+        // 收集所有 pass 的外部纹理通道绑定
+        auto loadPassTextures = [&](const PassData& pass) {
+            for (int i = 0; i < 4; ++i) {
+                const auto& ch = pass.channels[i];
+                if (ch.source == ChannelBinding::Source::ExternalTexture && !ch.texturePath.empty()) {
+                    if (!textures.HasTexture(i)) {
+                        if (ch.textureType == ChannelType::CubeMap) {
+                            textures.LoadCubeMap(i, ch.texturePath);
+                        } else {
+                            textures.LoadTexture(i, ch.texturePath);
+                        }
+                    }
+                }
+            }
+        };
+        loadPassTextures(projData.imagePass);
+        for (const auto& bp : projData.bufferPasses) {
+            loadPassTextures(bp);
         }
     }
 
-    // 从实际加载结果同步通道类型（LoadTexture/LoadCubeMap 内部会设置）
+    // 从实际加载结果同步通道类型
     for (int i = 0; i < 4; ++i) {
         ChannelType actual = textures.GetChannelType(i);
         if (actual != ChannelType::None) {
@@ -410,21 +450,97 @@ int main(int argc, char* argv[]) {
     }
 
     // ============================================================
-    // 加载着色器
+    // 配置 MultiPassRenderer
     // ============================================================
-    // 根据已加载的纹理推断通道类型（未加载的通道也保持 Texture2D 不会出错）
-    // 未来加入 CubeMap/3D 加载时，可通过 --channeltype0 cube 等参数或自动检测
-    ShaderManager shader;
-    shader.SetChannelTypes(config.channelTypes);
-    if (!shader.LoadFromFile(config.shaderPath)) {
-        std::cerr << "Failed to load shader: " << shader.GetLastError() << std::endl;
+    MultiPassRenderer multiPass;
+    multiPass.Init(config.width, config.height);
+
+    // 辅助函数：根据 ShaderProjectData 配置 MultiPassRenderer
+    auto SetupMultiPass = [&](const ShaderProjectData& data) -> bool {
+        multiPass.Clear();
+        multiPass.Init(config.width, config.height);
+        multiPass.SetCommonSource(data.commonSource);
+
+        // 设置外部纹理
+        for (int i = 0; i < 4; ++i) {
+            if (textures.HasTexture(i)) {
+                float tw, th;
+                textures.GetResolution(i, tw, th);
+                // 需要获取纹理 ID —— TextureManager 绑定时使用 glActiveTexture + glBindTexture
+                // 这里我们通过 Bind 获取当前绑定的纹理
+                textures.Bind(i);
+                GLint texId = 0;
+                GLenum target = (textures.GetChannelType(i) == ChannelType::CubeMap) ?
+                                GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D;
+                glGetIntegerv((target == GL_TEXTURE_CUBE_MAP) ?
+                              GL_TEXTURE_BINDING_CUBE_MAP : GL_TEXTURE_BINDING_2D, &texId);
+                multiPass.SetExternalTexture(i, static_cast<GLuint>(texId),
+                                             static_cast<int>(tw), static_cast<int>(th),
+                                             textures.GetChannelType(i));
+            }
+        }
+
+        // 添加 Buffer passes
+        for (const auto& bp : data.bufferPasses) {
+            std::array<int, 4> inputs = {-1, -1, -1, -1};
+            std::array<ChannelType, 4> chTypes = {
+                ChannelType::Texture2D, ChannelType::Texture2D,
+                ChannelType::Texture2D, ChannelType::Texture2D
+            };
+            for (int i = 0; i < 4; ++i) {
+                const auto& ch = bp.channels[i];
+                if (ch.source == ChannelBinding::Source::Buffer) {
+                    inputs[i] = ch.bufferIndex;
+                } else if (ch.source == ChannelBinding::Source::ExternalTexture) {
+                    inputs[i] = 100 + i;  // 外部纹理通道
+                    chTypes[i] = ch.textureType;
+                }
+            }
+            if (multiPass.AddBufferPass(bp.name, bp.code, inputs, chTypes) < 0) {
+                return false;
+            }
+        }
+
+        // 设置 Image pass
+        {
+            std::array<int, 4> inputs = {-1, -1, -1, -1};
+            std::array<ChannelType, 4> chTypes = {
+                ChannelType::Texture2D, ChannelType::Texture2D,
+                ChannelType::Texture2D, ChannelType::Texture2D
+            };
+            for (int i = 0; i < 4; ++i) {
+                const auto& ch = data.imagePass.channels[i];
+                if (ch.source == ChannelBinding::Source::Buffer) {
+                    inputs[i] = ch.bufferIndex;
+                } else if (ch.source == ChannelBinding::Source::ExternalTexture) {
+                    inputs[i] = 100 + i;
+                    chTypes[i] = ch.textureType;
+                }
+            }
+            if (!multiPass.SetImagePass(data.imagePass.code, inputs, chTypes)) {
+                return false;
+            }
+        }
+
+        // 降分辨率模式：Image pass 渲染到 renderFBO
+        if (useScaledRender && renderFBO) {
+            multiPass.SetImageTargetFBO(renderFBO);
+            multiPass.Resize(renderWidth, renderHeight);
+        }
+
+        return true;
+    };
+
+    if (!SetupMultiPass(projData)) {
+        std::cerr << "Failed to setup multi-pass renderer: " << multiPass.GetLastError() << std::endl;
         SDL_GL_DeleteContext(glContext);
         SDL_DestroyWindow(window);
         SDL_Quit();
         return 1;
     }
 
-    std::cout << "Shader loaded: " << config.shaderPath << std::endl;
+    std::cout << "Shader loaded: " << config.shaderPath
+              << (projData.isMultiPass ? " (multi-pass)" : " (single-pass)") << std::endl;
 
     // ============================================================
     // 热加载
@@ -432,10 +548,16 @@ int main(int argc, char* argv[]) {
     std::atomic<bool> shaderNeedsReload{false};
     FileWatcher watcher;
     if (config.hotReload) {
-        watcher.Watch(config.shaderPath, [&](const std::string&) {
-            shaderNeedsReload.store(true);
-        });
-        std::cout << "Hot reload enabled." << std::endl;
+        auto files = project.GetAllFiles();
+        if (!files.empty()) {
+            watcher.Watch(files[0], [&](const std::string&) {
+                shaderNeedsReload.store(true);
+            });
+            for (size_t i = 1; i < files.size(); ++i) {
+                watcher.AddFile(files[i]);
+            }
+        }
+        std::cout << "Hot reload enabled (" << files.size() << " file(s) monitored)." << std::endl;
     }
 
     // ============================================================
@@ -469,17 +591,26 @@ int main(int argc, char* argv[]) {
     DebugUIState debugState;
     std::string lastShaderError;
 
-    // 扫描 assets/shaders/ 目录获取所有 .glsl 文件
+    // 扫描 assets/shaders/ 目录获取所有 shader 文件（.glsl, .json, 子目录）
     auto ScanShaderFiles = [&]() {
         debugState.shaderFiles.clear();
         const std::string shaderDir = "assets/shaders";
         std::error_code ec;
         if (std::filesystem::exists(shaderDir, ec)) {
             for (const auto& entry : std::filesystem::directory_iterator(shaderDir, ec)) {
-                if (entry.is_regular_file() && entry.path().extension() == ".glsl") {
-                    // 使用正斜杠路径，与项目惯例一致
-                    std::string path = entry.path().generic_string();
-                    debugState.shaderFiles.push_back(path);
+                if (entry.is_regular_file()) {
+                    auto ext = entry.path().extension();
+                    if (ext == ".glsl" || ext == ".json") {
+                        std::string path = entry.path().generic_string();
+                        debugState.shaderFiles.push_back(path);
+                    }
+                } else if (entry.is_directory()) {
+                    // 目录模式：检查是否包含 image.glsl
+                    auto imagePath = entry.path() / "image.glsl";
+                    if (std::filesystem::exists(imagePath, ec)) {
+                        std::string path = entry.path().generic_string();
+                        debugState.shaderFiles.push_back(path);
+                    }
                 }
             }
             std::sort(debugState.shaderFiles.begin(), debugState.shaderFiles.end());
@@ -570,6 +701,8 @@ int main(int argc, char* argv[]) {
         debugState.shaderPath  = config.shaderPath.c_str();
         debugState.shaderError = lastShaderError.c_str();
         debugState.paused      = paused.load();
+        debugState.isMultiPass = multiPass.IsMultiPass();
+        debugState.passNames   = multiPass.GetPassNames();
     };
 
     while (running) {
@@ -603,6 +736,10 @@ int main(int argc, char* argv[]) {
                     renderer.SetViewport(config.width, config.height);
                     if (useScaledRender) {
                         CreateRenderFBO(config.width, config.height);
+                        multiPass.Resize(renderWidth, renderHeight);
+                        multiPass.SetImageTargetFBO(renderFBO);
+                    } else {
+                        multiPass.Resize(config.width, config.height);
                     }
                 }
                 break;
@@ -669,9 +806,20 @@ int main(int argc, char* argv[]) {
                 // 更新 FileWatcher
                 if (config.hotReload) {
                     watcher.Stop();
-                    watcher.Watch(config.shaderPath, [&](const std::string&) {
-                        shaderNeedsReload.store(true);
-                    });
+                    // 重新加载项目并设置监控
+                    ShaderProject newProject;
+                    if (newProject.Load(config.shaderPath)) {
+                        project = std::move(newProject);
+                        auto files = project.GetAllFiles();
+                        if (!files.empty()) {
+                            watcher.Watch(files[0], [&](const std::string&) {
+                                shaderNeedsReload.store(true);
+                            });
+                            for (size_t fi = 1; fi < files.size(); ++fi) {
+                                watcher.AddFile(files[fi]);
+                            }
+                        }
+                    }
                 }
             }
             // 重载请求
@@ -748,20 +896,34 @@ int main(int argc, char* argv[]) {
                 }
                 if (useScaledRender) {
                     CreateRenderFBO(config.width, config.height);
+                    multiPass.SetImageTargetFBO(renderFBO);
+                    multiPass.Resize(renderWidth, renderHeight);
+                } else {
+                    multiPass.SetImageTargetFBO(0);
+                    multiPass.Resize(config.width, config.height);
                 }
             }
         }
 
-        // 热加载：重新编译 shader
+        // 热加载：重新加载整个 shader 项目并重建渲染器
         if (shaderNeedsReload.exchange(false)) {
-            ShaderManager newShader;
-            newShader.SetChannelTypes(config.channelTypes);
-            if (newShader.LoadFromFile(config.shaderPath)) {
-                shader = std::move(newShader);
-                lastShaderError.clear();
-                std::cout << "Shader reloaded successfully." << std::endl;
+            ShaderProject newProject;
+            if (newProject.Load(config.shaderPath)) {
+                const auto& newData = newProject.GetData();
+                // 先备份旧状态，尝试用新数据配置
+                // 使用 SetupMultiPass 直接操作 multiPass（它会先 Clear）
+                project = std::move(newProject);
+                if (SetupMultiPass(project.GetData())) {
+                    lastShaderError.clear();
+                    std::cout << "Shader reloaded successfully." << std::endl;
+                } else {
+                    lastShaderError = multiPass.GetLastError();
+                    std::cerr << "Shader reload failed: " << lastShaderError << std::endl;
+                    // 注意：multiPass 此时已被 Clear，旧 shader 也丢失了
+                    // 这是可接受的——与原来的行为一致（编译失败时保留错误信息）
+                }
             } else {
-                lastShaderError = newShader.GetLastError();
+                lastShaderError = newProject.GetLastError();
                 std::cerr << "Shader reload failed: " << lastShaderError << std::endl;
             }
         }
@@ -843,19 +1005,24 @@ int main(int argc, char* argv[]) {
             static_cast<float>(localTm.tm_hour * 3600 + localTm.tm_min * 60 + localTm.tm_sec)
         };
 
-        // 绑定纹理并设置 iChannel uniform
-        textures.BindAll();
-        shader.Use();
-        for (int i = 0; i < 4; ++i) {
-            char name[16];
-            snprintf(name, sizeof(name), "iChannel%d", i);
-            glUniform1i(shader.GetUniformLocation(name), i);
+        // 获取全屏四边形 VAO（从 Renderer 借用）
+        // Renderer::Init() 创建的 VAO 在内部，通过 RenderFrame 使用
+        // MultiPassRenderer 需要 quadVAO —— 我们从 Renderer 获取
+        // 注意：Renderer 的 vao_ 是 private，我们需要直接使用它
+        // 为了最小化改动，我们在这里创建一个简单的 quadVAO
+        // （实际上 Renderer 已经有了，但它是 private 的）
+        static GLuint quadVAO = 0, quadVBO = 0;
+        if (quadVAO == 0) {
+            float quadVerts[] = {-1,-1, 1,-1, -1,1, 1,-1, 1,1, -1,1};
+            glGenVertexArrays(1, &quadVAO);
+            glGenBuffers(1, &quadVBO);
+            glBindVertexArray(quadVAO);
+            glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
+            glBufferData(GL_ARRAY_BUFFER, sizeof(quadVerts), quadVerts, GL_STATIC_DRAW);
+            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+            glEnableVertexAttribArray(0);
+            glBindVertexArray(0);
         }
-        // 设置 iChannelResolution
-        float channelRes[4][3];
-        textures.GetAllResolutions(channelRes);
-        glUniform3fv(shader.GetUniformLocation("iChannelResolution"), 4, &channelRes[0][0]);
-        glUniform1f(shader.GetUniformLocation("iClickTime"), clickTime);
 
         // 渲染
         if (config.wallpaperMode && !wallpaperWindows.empty()) {
@@ -882,7 +1049,6 @@ int main(int argc, char* argv[]) {
                                     clickLocalY >= 0 && clickLocalY < ww.height);
 
                 if (clickInThis) {
-                    // 保持正/负号（正=按住，负=已松开）
                     localMouse[2] = (mouse[2] >= 0) ? clickLocalX : -clickLocalX;
                     localMouse[3] = (mouse[3] >= 0) ? clickLocalY : -clickLocalY;
                 } else {
@@ -893,16 +1059,11 @@ int main(int argc, char* argv[]) {
                 Uint64 renderStart = SDL_GetPerformanceCounter();
 
                 if (useScaledRender) {
-                    // 降分辨率渲染到 FBO（FBO 已按最大显示器尺寸预分配，无需重建）
                     int curRenderW = static_cast<int>(ww.width * config.renderScale);
                     int curRenderH = static_cast<int>(ww.height * config.renderScale);
                     if (curRenderW < 1) curRenderW = 1;
                     if (curRenderH < 1) curRenderH = 1;
 
-                    glBindFramebuffer(GL_FRAMEBUFFER, renderFBO);
-                    renderer.SetViewport(curRenderW, curRenderH);
-
-                    // 鼠标坐标也按比例缩放
                     float scaledMouse[4] = {
                         localMouse[0] * config.renderScale,
                         localMouse[1] * config.renderScale,
@@ -910,12 +1071,14 @@ int main(int argc, char* argv[]) {
                         localMouse[3] * config.renderScale
                     };
 
-                    renderer.RenderFrame(shader, currentTime, timeDelta, frameCount,
-                                        scaledMouse, date);
+                    // 设置 Image pass 渲染到降分辨率 FBO
+                    multiPass.SetImageTargetFBO(renderFBO);
+                    multiPass.RenderAllPasses(quadVAO, currentTime, timeDelta, frameCount,
+                                             scaledMouse, date, curRenderW, curRenderH, clickTime);
 
                     // Blit FBO 到屏幕
                     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-                    renderer.SetViewport(ww.width, ww.height);
+                    glViewport(0, 0, ww.width, ww.height);
                     glUseProgram(blitProgram);
                     glActiveTexture(GL_TEXTURE0);
                     glBindTexture(GL_TEXTURE_2D, renderTex);
@@ -924,9 +1087,9 @@ int main(int argc, char* argv[]) {
                     glDrawArrays(GL_TRIANGLES, 0, 6);
                     glBindVertexArray(0);
                 } else {
-                    renderer.SetViewport(ww.width, ww.height);
-                    renderer.RenderFrame(shader, currentTime, timeDelta, frameCount,
-                                        localMouse, date);
+                    multiPass.SetImageTargetFBO(0);
+                    multiPass.RenderAllPasses(quadVAO, currentTime, timeDelta, frameCount,
+                                             localMouse, date, ww.width, ww.height, clickTime);
                 }
 
                 // 壁纸模式 Debug 叠加
@@ -953,15 +1116,15 @@ int main(int argc, char* argv[]) {
                 int scaledH = static_cast<int>(config.height * config.renderScale);
                 if (scaledW != renderWidth || scaledH != renderHeight) {
                     CreateRenderFBO(config.width, config.height);
+                    multiPass.Resize(renderWidth, renderHeight);
                 }
 
-                glBindFramebuffer(GL_FRAMEBUFFER, renderFBO);
-                renderer.SetViewport(renderWidth, renderHeight);
-                renderer.RenderFrame(shader, currentTime, timeDelta, frameCount,
-                                    mouse, date);
+                multiPass.SetImageTargetFBO(renderFBO);
+                multiPass.RenderAllPasses(quadVAO, currentTime, timeDelta, frameCount,
+                                         mouse, date, renderWidth, renderHeight, clickTime);
 
                 glBindFramebuffer(GL_FRAMEBUFFER, 0);
-                renderer.SetViewport(config.width, config.height);
+                glViewport(0, 0, config.width, config.height);
                 glUseProgram(blitProgram);
                 glActiveTexture(GL_TEXTURE0);
                 glBindTexture(GL_TEXTURE_2D, renderTex);
@@ -970,8 +1133,9 @@ int main(int argc, char* argv[]) {
                 glDrawArrays(GL_TRIANGLES, 0, 6);
                 glBindVertexArray(0);
             } else {
-                renderer.RenderFrame(shader, currentTime, timeDelta, frameCount,
-                                    mouse, date);
+                multiPass.SetImageTargetFBO(0);
+                multiPass.RenderAllPasses(quadVAO, currentTime, timeDelta, frameCount,
+                                         mouse, date, config.width, config.height, clickTime);
             }
 
             // DebugUI 渲染（在 shader 渲染后、SwapWindow 前）

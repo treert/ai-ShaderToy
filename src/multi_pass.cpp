@@ -1,19 +1,30 @@
 #include "multi_pass.h"
 #include <iostream>
+#include <algorithm>
 
 MultiPassRenderer::MultiPassRenderer() = default;
 
 MultiPassRenderer::~MultiPassRenderer() {
-    for (auto& pass : bufferPasses_) {
-        DestroyFBO(pass);
-    }
-    // imagePass_ 没有 FBO（直接渲染到屏幕）
+    Clear();
 }
 
 bool MultiPassRenderer::Init(int width, int height) {
     width_ = width;
     height_ = height;
     return true;
+}
+
+void MultiPassRenderer::Clear() {
+    for (auto& pass : bufferPasses_) {
+        DestroyFBO(pass);
+    }
+    bufferPasses_.clear();
+
+    // Image pass 的 FBO 可能是外部的（降分辨率 FBO），不由我们销毁
+    imagePass_ = RenderPass{};
+    commonSource_.clear();
+    lastError_.clear();
+    externalTextures_ = {};
 }
 
 void MultiPassRenderer::Resize(int width, int height) {
@@ -27,13 +38,32 @@ void MultiPassRenderer::Resize(int width, int height) {
     }
 }
 
+void MultiPassRenderer::SetCommonSource(const std::string& common) {
+    commonSource_ = common;
+}
+
+void MultiPassRenderer::SetExternalTexture(int channel, GLuint textureId, int width, int height,
+                                            ChannelType type) {
+    if (channel >= 0 && channel < 4) {
+        externalTextures_[channel].textureId = textureId;
+        externalTextures_[channel].width = width;
+        externalTextures_[channel].height = height;
+        externalTextures_[channel].type = type;
+    }
+}
+
 int MultiPassRenderer::AddBufferPass(const std::string& name, const std::string& source,
-                                     const std::array<int, 4>& inputs) {
+                                     const std::array<int, 4>& inputs,
+                                     const std::array<ChannelType, 4>& channelTypes) {
     RenderPass pass;
     pass.name = name;
     pass.shaderSource = source;
     pass.inputChannels = inputs;
+    pass.channelTypes = channelTypes;
 
+    // 设置通道类型和 Common 代码后编译
+    pass.shader.SetChannelTypes(channelTypes);
+    pass.shader.SetCommonSource(commonSource_);
     if (!pass.shader.LoadFromSource(source)) {
         lastError_ = "Failed to compile " + name + ": " + pass.shader.GetLastError();
         std::cerr << lastError_ << std::endl;
@@ -52,12 +82,16 @@ int MultiPassRenderer::AddBufferPass(const std::string& name, const std::string&
 }
 
 bool MultiPassRenderer::SetImagePass(const std::string& source,
-                                     const std::array<int, 4>& inputs) {
+                                     const std::array<int, 4>& inputs,
+                                     const std::array<ChannelType, 4>& channelTypes) {
     imagePass_.name = "Image";
     imagePass_.shaderSource = source;
     imagePass_.inputChannels = inputs;
-    imagePass_.fbo = 0;  // 渲染到屏幕
+    imagePass_.channelTypes = channelTypes;
+    // imagePass_.fbo 默认为 0（渲染到屏幕），可通过 SetImageTargetFBO 修改
 
+    imagePass_.shader.SetChannelTypes(channelTypes);
+    imagePass_.shader.SetCommonSource(commonSource_);
     if (!imagePass_.shader.LoadFromSource(source)) {
         lastError_ = "Failed to compile Image pass: " + imagePass_.shader.GetLastError();
         std::cerr << lastError_ << std::endl;
@@ -67,21 +101,25 @@ bool MultiPassRenderer::SetImagePass(const std::string& source,
     return true;
 }
 
+void MultiPassRenderer::SetImageTargetFBO(GLuint fbo) {
+    imagePass_.fbo = fbo;
+}
+
 void MultiPassRenderer::RenderAllPasses(GLuint quadVAO, float time, float timeDelta,
                                         int frame, const float mouse[4], const float date[4],
-                                        int viewportW, int viewportH) {
+                                        int viewportW, int viewportH, float clickTime) {
     // 1. 渲染所有 Buffer pass
     for (auto& pass : bufferPasses_) {
         RenderSinglePass(pass, quadVAO, time, timeDelta, frame,
-                        mouse, date, viewportW, viewportH);
+                        mouse, date, viewportW, viewportH, clickTime);
     }
 
     // 2. 交换 buffer 双缓冲
     SwapBuffers();
 
-    // 3. 渲染 Image pass（输出到屏幕）
+    // 3. 渲染 Image pass（输出到屏幕或降分辨率 FBO）
     RenderSinglePass(imagePass_, quadVAO, time, timeDelta, frame,
-                    mouse, date, viewportW, viewportH);
+                    mouse, date, viewportW, viewportH, clickTime);
 }
 
 GLuint MultiPassRenderer::GetBufferOutputTexture(int bufferIndex) const {
@@ -89,6 +127,15 @@ GLuint MultiPassRenderer::GetBufferOutputTexture(int bufferIndex) const {
         return bufferPasses_[bufferIndex].outputTexturePrev;
     }
     return 0;
+}
+
+std::vector<std::string> MultiPassRenderer::GetPassNames() const {
+    std::vector<std::string> names;
+    for (const auto& pass : bufferPasses_) {
+        names.push_back(pass.name);
+    }
+    names.push_back(imagePass_.name.empty() ? "Image" : imagePass_.name);
+    return names;
 }
 
 bool MultiPassRenderer::CreateFBO(RenderPass& pass, int width, int height) {
@@ -150,10 +197,10 @@ void MultiPassRenderer::DestroyFBO(RenderPass& pass) {
 void MultiPassRenderer::RenderSinglePass(RenderPass& pass, GLuint quadVAO,
                                           float time, float timeDelta, int frame,
                                           const float mouse[4], const float date[4],
-                                          int viewportW, int viewportH) {
-    // 绑定 FBO（Image pass 时 fbo=0 即渲染到屏幕）
+                                          int viewportW, int viewportH, float clickTime) {
+    // 绑定 FBO（Image pass 时 fbo=0 即渲染到屏幕，或降分辨率 FBO）
     glBindFramebuffer(GL_FRAMEBUFFER, pass.fbo);
-    if (pass.fbo) {
+    if (pass.fbo && pass.width > 0 && pass.height > 0) {
         glViewport(0, 0, pass.width, pass.height);
     } else {
         glViewport(0, 0, viewportW, viewportH);
@@ -163,8 +210,14 @@ void MultiPassRenderer::RenderSinglePass(RenderPass& pass, GLuint quadVAO,
     pass.shader.Use();
 
     // 设置 uniform
-    float resW = pass.fbo ? static_cast<float>(pass.width) : static_cast<float>(viewportW);
-    float resH = pass.fbo ? static_cast<float>(pass.height) : static_cast<float>(viewportH);
+    float resW, resH;
+    if (pass.fbo && pass.width > 0 && pass.height > 0) {
+        resW = static_cast<float>(pass.width);
+        resH = static_cast<float>(pass.height);
+    } else {
+        resW = static_cast<float>(viewportW);
+        resH = static_cast<float>(viewportH);
+    }
     glUniform3f(pass.shader.GetUniformLocation("iResolution"), resW, resH, 1.0f);
     glUniform1f(pass.shader.GetUniformLocation("iTime"), time);
     glUniform1f(pass.shader.GetUniformLocation("iTimeDelta"), timeDelta);
@@ -178,8 +231,10 @@ void MultiPassRenderer::RenderSinglePass(RenderPass& pass, GLuint quadVAO,
     glUniform1f(pass.shader.GetUniformLocation("iFrameRate"), frameRate);
     float channelTime[4] = {time, time, time, time};
     glUniform1fv(pass.shader.GetUniformLocation("iChannelTime"), 4, channelTime);
+    glUniform1f(pass.shader.GetUniformLocation("iClickTime"), clickTime);
 
-    // 绑定输入纹理到 iChannel0~3
+    // 设置 iChannelResolution 和绑定输入纹理到 iChannel0~3
+    float channelRes[4][3] = {};
     for (int i = 0; i < 4; ++i) {
         int input = pass.inputChannels[i];
         glActiveTexture(GL_TEXTURE0 + i);
@@ -187,18 +242,32 @@ void MultiPassRenderer::RenderSinglePass(RenderPass& pass, GLuint quadVAO,
         if (input >= 0 && input < static_cast<int>(bufferPasses_.size())) {
             // 输入来自 buffer pass —— 使用上一帧的输出
             glBindTexture(GL_TEXTURE_2D, bufferPasses_[input].outputTexturePrev);
-        } else {
-            // 无输入或外部纹理（由外部绑定）
-            if (input < 100) {
+            channelRes[i][0] = static_cast<float>(bufferPasses_[input].width);
+            channelRes[i][1] = static_cast<float>(bufferPasses_[input].height);
+            channelRes[i][2] = 1.0f;
+        } else if (input >= 100 && input <= 103) {
+            // 外部纹理
+            int extIdx = input - 100;
+            const auto& ext = externalTextures_[extIdx];
+            if (ext.textureId) {
+                GLenum target = (ext.type == ChannelType::CubeMap) ? GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D;
+                glBindTexture(target, ext.textureId);
+                channelRes[i][0] = static_cast<float>(ext.width);
+                channelRes[i][1] = static_cast<float>(ext.height);
+                channelRes[i][2] = 1.0f;
+            } else {
                 glBindTexture(GL_TEXTURE_2D, 0);
             }
-            // input >= 100 的情况由外部 TextureManager 绑定，此处不覆盖
+        } else {
+            // 无输入
+            glBindTexture(GL_TEXTURE_2D, 0);
         }
 
         char uniformName[16];
         snprintf(uniformName, sizeof(uniformName), "iChannel%d", i);
         glUniform1i(pass.shader.GetUniformLocation(uniformName), i);
     }
+    glUniform3fv(pass.shader.GetUniformLocation("iChannelResolution"), 4, &channelRes[0][0]);
 
     // 绘制全屏四边形
     glBindVertexArray(quadVAO);

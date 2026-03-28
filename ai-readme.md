@@ -46,3 +46,18 @@
 - [x] 滑条调节：目标 FPS（15~120）、renderScale（0.1~1.0）
 - [x] Shader 选择器：列出 assets/shaders/*.glsl 文件，点击切换
 - [x] 壁纸模式 Debug 叠加（--debug 参数，只读纯文字叠加，默认关闭）
+
+### 阶段 4：多 Pass 渲染 ✅ 已完成
+- [x] ShaderProject 统一加载层（自动检测 .glsl / .json / 目录模式）
+- [x] ShaderToy API JSON 导入（解析 renderpass 数组，自动识别 image/buffer/common）
+- [x] 多文件目录模式（image.glsl + buf_a~d.glsl + common.glsl + channels.json）
+- [x] Common 共享代码注入（ShaderManager 支持 commonSource，编译时自动注入到每个 pass）
+- [x] MultiPassRenderer 集成到 main.cpp 主渲染循环（统一单 Pass 和多 Pass）
+- [x] Buffer 间互引用和自引用（双缓冲读取上一帧输出）
+- [x] iChannelResolution 多 Pass 适配（Buffer 输出尺寸正确传入）
+- [x] 降分辨率渲染与多 Pass FBO 协调
+- [x] 壁纸模式多 Pass 渲染
+- [x] 热加载适配多 Pass（监控所有相关文件，全部重编译）
+- [x] 调试 UI 展示渲染模式和各 pass 信息
+- [x] 多 Pass 示例（assets/shaders/multipass_demo/）
+- [x] nlohmann/json 依赖集成（FetchContent）

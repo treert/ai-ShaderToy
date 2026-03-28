@@ -20,7 +20,9 @@ ShaderManager::~ShaderManager() {
 }
 
 ShaderManager::ShaderManager(ShaderManager&& other) noexcept
-    : program_(other.program_), lastError_(std::move(other.lastError_)) {
+    : program_(other.program_), lastError_(std::move(other.lastError_)),
+      commonSource_(std::move(other.commonSource_)),
+      channelTypes_(other.channelTypes_) {
     other.program_ = 0;
 }
 
@@ -29,6 +31,8 @@ ShaderManager& ShaderManager::operator=(ShaderManager&& other) noexcept {
         Cleanup();
         program_ = other.program_;
         lastError_ = std::move(other.lastError_);
+        commonSource_ = std::move(other.commonSource_);
+        channelTypes_ = other.channelTypes_;
         other.program_ = 0;
     }
     return *this;
@@ -36,6 +40,10 @@ ShaderManager& ShaderManager::operator=(ShaderManager&& other) noexcept {
 
 void ShaderManager::SetChannelTypes(const std::array<ChannelType, 4>& types) {
     channelTypes_ = types;
+}
+
+void ShaderManager::SetCommonSource(const std::string& common) {
+    commonSource_ = common;
 }
 
 bool ShaderManager::LoadFromFile(const std::string& filePath) {
@@ -131,6 +139,13 @@ uniform float     iClickTime;           // 最近一次点击的时间 (seconds)
 out vec4 _fragColor_out;
 
 )glsl";
+
+    // 注入 Common 共享代码段（多 Pass 时各 pass 共享的函数/结构体/常量）
+    if (!commonSource_.empty()) {
+        wrapped += "// === Common code begin ===\n";
+        wrapped += commonSource_;
+        wrapped += "\n// === Common code end ===\n\n";
+    }
 
     // 插入用户的 ShaderToy 源码
     wrapped += source;

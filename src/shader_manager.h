@@ -28,6 +28,9 @@ public:
     /// 设置各通道的采样器类型（在 Load 之前调用）
     void SetChannelTypes(const std::array<ChannelType, 4>& types);
 
+    /// 设置 Common 共享代码段（在 Load 之前调用，多 Pass 时各 pass 共享的函数/结构体）
+    void SetCommonSource(const std::string& common);
+
     /// 从文件加载 ShaderToy 格式的着色器源码并编译
     bool LoadFromFile(const std::string& filePath);
 
@@ -64,6 +67,7 @@ private:
 
     GLuint program_ = 0;
     std::string lastError_;
+    std::string commonSource_;  // Common 共享代码段（多 Pass 时注入到每个 pass）
     std::array<ChannelType, 4> channelTypes_ = {
         ChannelType::Texture2D, ChannelType::Texture2D,
         ChannelType::Texture2D, ChannelType::Texture2D

@@ -39,6 +39,16 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(imgui)
 
+# nlohmann/json (header-only JSON 解析库，用于 ShaderToy JSON 导入)
+FetchContent_Declare(
+    nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG        v3.11.3
+    GIT_SHALLOW    TRUE
+)
+set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(nlohmann_json)
+
 # ============================================================
 # 主程序
 # ============================================================
@@ -64,6 +74,7 @@ set(SOURCES
     src/file_watcher.cpp
     src/tray_icon.cpp
     src/debug_ui.cpp
+    src/shader_project.cpp
     src/app.rc
     ${IMGUI_SOURCES}
 )
@@ -77,6 +88,7 @@ set(HEADERS
     src/file_watcher.h
     src/tray_icon.h
     src/debug_ui.h
+    src/shader_project.h
     src/stb_image.h
 )
 
@@ -93,6 +105,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     SDL2::SDL2main
     glad
     opengl32
+    nlohmann_json::nlohmann_json
 )
 
 # MSVC: 禁用 C4005（APIENTRY 宏重定义，GLAD 与 Windows SDK 冲突）

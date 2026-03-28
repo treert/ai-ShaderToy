@@ -1,0 +1,8 @@
+{
+    "image": {
+        "iChannel0": "buf_a"
+    },
+    "buf_a": {
+        "iChannel0": "buf_a"
+    }
+}

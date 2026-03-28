@@ -17,6 +17,8 @@ struct DebugUIState {
     float mouse[4]      = {0.0f, 0.0f, 0.0f, 0.0f};
     const char* shaderPath  = "";
     const char* shaderError = "";
+    bool isMultiPass   = false;                 // 是否多 Pass 模式
+    std::vector<std::string> passNames;         // 各 pass 名称列表（用于展示）
 
     // === 可交互控制（DebugUI 修改，main.cpp 读取并应用） ===
     bool  paused      = false;
