@@ -117,12 +117,19 @@ bool ShaderProject::LoadFromJSON(const std::string& path) {
 
     allFiles_.push_back(path);
 
-    // 获取 Shader 对象
-    if (!jsonData.contains("Shader")) {
-        lastError_ = "JSON missing 'Shader' key";
+    // 兼容两种 JSON 格式：
+    //   格式1（API）: { "Shader": { "info": {...}, "renderpass": [...] } }
+    //   格式2（直接导出）: { "info": {...}, "renderpass": [...] }
+    const json* shaderObjPtr = nullptr;
+    if (jsonData.contains("Shader")) {
+        shaderObjPtr = &jsonData["Shader"];
+    } else if (jsonData.contains("renderpass")) {
+        shaderObjPtr = &jsonData;
+    } else {
+        lastError_ = "JSON missing 'Shader' key or 'renderpass' array";
         return false;
     }
-    const auto& shaderObj = jsonData["Shader"];
+    const auto& shaderObj = *shaderObjPtr;
 
     // 提取项目名称
     if (shaderObj.contains("info") && shaderObj["info"].contains("name")) {
@@ -133,7 +140,7 @@ bool ShaderProject::LoadFromJSON(const std::string& path) {
 
     // 解析 renderpass 数组
     if (!shaderObj.contains("renderpass") || !shaderObj["renderpass"].is_array()) {
-        lastError_ = "JSON missing 'Shader.renderpass' array";
+        lastError_ = "JSON missing 'renderpass' array";
         return false;
     }
 
