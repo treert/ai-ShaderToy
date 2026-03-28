@@ -99,6 +99,11 @@ static AppConfig ParseArgs(int argc, char* argv[]) {
 }
 
 int main(int argc, char* argv[]) {
+    // 声明 DPI 感知，确保多显示器不同 DPI 时获取正确的物理像素尺寸
+#ifdef _WIN32
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+#endif
+
     AppConfig config = ParseArgs(argc, argv);
 
     // ============================================================
@@ -122,15 +127,19 @@ int main(int argc, char* argv[]) {
 
     // 创建窗口
     Uint32 windowFlags = SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN;
+    int winX = SDL_WINDOWPOS_CENTERED;
+    int winY = SDL_WINDOWPOS_CENTERED;
     if (config.wallpaperMode) {
         windowFlags |= SDL_WINDOW_BORDERLESS;
+        winX = 0;
+        winY = 0;
     } else {
         windowFlags |= SDL_WINDOW_RESIZABLE;
     }
 
     SDL_Window* window = SDL_CreateWindow(
         kWindowTitle,
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+        winX, winY,
         config.width, config.height,
         windowFlags
     );
@@ -348,8 +357,11 @@ int main(int argc, char* argv[]) {
         if (config.wallpaperMode) {
             POINT pt;
             GetCursorPos(&pt);
-            mouse[0] = static_cast<float>(pt.x);
-            mouse[1] = static_cast<float>(config.height - pt.y);
+            // 屏幕坐标转渲染窗口坐标（减去虚拟桌面偏移）
+            int vx, vy;
+            Wallpaper::GetVirtualDesktopOffset(vx, vy);
+            mouse[0] = static_cast<float>(pt.x - vx);
+            mouse[1] = static_cast<float>(config.height - (pt.y - vy));
 
             bool leftDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
             if (leftDown && !mousePressed) {

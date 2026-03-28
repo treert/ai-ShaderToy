@@ -65,14 +65,12 @@ bool Wallpaper::EmbedAsWallpaper(SDL_Window* window) {
     // 设置为 WorkerW 的子窗口
     SetParent(hwnd, workerW_);
 
-    // 获取虚拟桌面大小（覆盖所有显示器）并调整窗口
-    int x, y, w, h;
-    GetVirtualDesktopOffset(x, y);
+    // WorkerW 内部坐标从 (0,0) 开始，覆盖整个虚拟桌面
+    int w, h;
     GetVirtualDesktopResolution(w, h);
-    SetWindowPos(hwnd, nullptr, x, y, w, h, SWP_NOZORDER | SWP_SHOWWINDOW);
+    SetWindowPos(hwnd, nullptr, 0, 0, w, h, SWP_NOZORDER | SWP_SHOWWINDOW);
 
-    std::cout << "Successfully embedded as wallpaper (" << w << "x" << h
-              << " at " << x << "," << y << ")" << std::endl;
+    std::cout << "Successfully embedded as wallpaper (" << w << "x" << h << ")" << std::endl;
     return true;
 }
 
