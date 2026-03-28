@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ShaderToy 预制纹理资源</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,'Segoe UI',Roboto,sans-serif;background:#1a1a2e;color:#e0e0e0;padding:20px;max-width:1400px;margin:0 auto}
+h1{text-align:center;color:#00d2ff;margin-bottom:6px;font-size:1.6em}
+.subtitle{text-align:center;color:#888;margin-bottom:20px;font-size:.9em}
+.source{text-align:center;margin-bottom:24px;font-size:.85em;color:#666}
+.source a{color:#00d2ff}
+h2{color:#e94560;margin:24px 0 12px;padding-bottom:6px;border-bottom:1px solid #333}
+.info-box{background:#16213e;border:1px solid #0f3460;border-radius:8px;padding:14px;margin-bottom:20px;line-height:1.6;font-size:.9em}
+.info-box code{background:#0f3460;padding:2px 6px;border-radius:3px;font-size:.85em}
+.info-box strong{color:#00d2ff}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px;margin-bottom:28px}
+.card{background:#16213e;border:1px solid #0f3460;border-radius:8px;overflow:hidden;transition:transform .2s}
+.card:hover{transform:translateY(-2px);box-shadow:0 4px 12px rgba(0,210,255,.15)}
+.card img{width:100%;height:140px;object-fit:cover;background:#111;display:block;cursor:pointer}
+.card .info{padding:8px 10px}
+.card .name{font-weight:bold;color:#fff;font-size:.85em;margin-bottom:2px}
+.card .hash{color:#666;font-size:.65em;word-break:break-all}
+.card a.dl{display:block;text-align:center;padding:6px;background:#0f3460;color:#00d2ff;text-decoration:none;font-size:.8em;font-weight:bold;transition:background .2s}
+.card a.dl:hover{background:#1a4a7a}
+.cube-group{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:16px;padding:12px;background:#16213e;border:1px solid #0f3460;border-radius:8px}
+.cube-group .cube-label{width:100%;color:#fff;font-weight:bold;margin-bottom:6px;font-size:.9em}
+.cube-group img{width:80px;height:80px;object-fit:cover;border-radius:4px;background:#111;cursor:pointer}
+.cube-group a{text-decoration:none}
+.vol-list{list-style:none;padding:0}
+.vol-list li{padding:6px 12px;background:#16213e;border:1px solid #0f3460;border-radius:4px;margin:4px 0}
+.vol-list li a{color:#00d2ff;text-decoration:none}
+</style>
+</head>
+<body>
+
+<h1>ShaderToy 预制纹理资源</h1>
+<p class="subtitle">本页直接引用 <code>shadertoy.com/media/a/</code> 的图片 &mdash; 在浏览器中打开即可一键保存全部资源</p>
+<p class="source">
+  数据来源：<a href="https://shadertoyunofficial.wordpress.com/2019/07/23/shadertoy-media-files/" target="_blank">
+  Shadertoy Unofficial &mdash; Shadertoy media files</a>（by fabriceN, 2019-07-23, updated 2026-02-06）
+</p>
+
+<div class="info-box">
+<strong>如何一次性下载全部纹理：</strong><br><br>
+<b>1.</b> 用系统浏览器（Chrome / Edge / Firefox）打开本 HTML 文件<br>
+<b>2.</b> 等待页面中所有图片加载完成（图片来自 <code>shadertoy.com</code>，需要能访问该网站）<br>
+<b>3.</b> 按 <code>Ctrl+S</code>（或菜单 &rarr; 另存为），保存类型选择 <strong>「网页，全部」</strong><br>
+<b>4.</b> 浏览器会自动将全部图片保存到一个 <code>_files</code> 文件夹中<br>
+<b>5.</b> 将该文件夹中所有 <code>.jpg</code> / <code>.png</code> 文件复制到项目的 <code>assets/media/a/</code> 目录即可<br><br>
+<strong>原理：</strong>本页的所有图片 <code>&lt;img src&gt;</code> 直接指向 <code>https://www.shadertoy.com/media/a/{hash}.ext</code>，
+浏览器加载页面时会自动下载这些图片到缓存，Ctrl+S 保存网页时会一并导出。<br>
+ShaderToy JSON 中引用的 <code>/media/a/{hash}.ext</code> 路径，程序会自动映射到 <code>assets/media/a/</code> 查找。
+</div>
+
+<h2>2D 纹理 (Textures)</h2>
+<div class="grid" id="tex-grid"></div>
+
+<h2>CubeMap 立方体贴图</h2>
+<div id="cube-area"></div>
+
+<h2>3D 体积纹理 (Volumes)</h2>
+<ul class="vol-list" id="vol-list"></ul>
+
+<h2>视频 (Videos)</h2>
+<ul class="vol-list" id="vid-list"></ul>
+
+<h2>音乐 (Music)</h2>
+<ul class="vol-list" id="music-list"></ul>
+
+<script>
+const B = 'https://www.shadertoy.com/media/a';
+
+// ===== 2D 纹理（从 HTML 页面逐一对应提取） =====
+const TEX = [
+  // 第一行 3 张
+  { name: 'Abstract 1',       file: '52d2a8f514c4fd2d9866587f4d7b2a5bfa1a11a0e772077d7682deb8b3b517e5.jpg' },
+  { name: 'Abstract 2',       file: 'bd6464771e47eed832c5eb2cd85cdc0bfc697786b903bfd30f890f9d4fc36657.jpg' },
+  { name: 'London',           file: '8979352a182bde7c3c651ba2b2f4e0615de819585cc37b7175bcefbca15a6683.jpg' },
+  // 第二行 3 张
+  { name: 'Noise (RGBA)',     file: '85a6d68622b36995ccb98a89bbb119edf167c914660e4450d313de049320005c.png' },
+  { name: 'Font 1 (Octavio Good)', file: 'cb49c003b454385aa9975733aff4571c62182ccdda480aaba9a8d250014f00ec.png' },
+  { name: 'Font 2',           file: '08b42b43ae9d3c0605da11d0eac86618ea888e62cdd9518ee8b9097488b31560.png' },
+  // 第三行 3 张
+  { name: 'Bayer Matrix',     file: '0c7bf5fe9462d5bffbd11126e82908e39be3ce56220d900f633d58fb432e56f5.png' },
+  { name: 'Blue Noise',       file: '0a40562379b63dfb89227e6d172f39fdce9022cba76623f1054a2c83d6c0ba5d.png' },
+  { name: 'Organic 1',        file: 'fb918796edc3d2221218db0811e240e72e340350008338b0c07a52bd353666a6.jpg' },
+  // 第四行 3 张
+  { name: 'Pebbles',          file: '8de3a3924cb95bd0e95a443fff0326c869f9d4979cd1d5b6e94e2a01f5be53e9.jpg' },
+  { name: 'Nyancat',          file: 'cbcbb5a6cfb55c36f8f021fbb0e3f69ac96339a39fa85cd96f2017a2192821b5.png' },
+  { name: 'Rock Tiles',       file: 'cd4c518bc6ef165c39d4405b347b51ba40f8d7a065ab0e8d2e4f422cbc1e8a43.jpg' },
+  // 第五行 3 张
+  { name: 'Organic 2',        file: '92d7758c402f0927011ca8d0a7e40251439fba3a1dac26f5b8b62026323501aa.jpg' },
+  { name: 'Gray Noise Small', file: '79520a3d3a0f4d3caa440802ef4362e99d54e12b1392973e4ea321840970a88a.jpg' },
+  { name: 'Lichen',           file: '3871e838723dd6b166e490664eead8ec60aedd6b8d95bc8e2fe3f882f0fd90f0.jpg' },
+  // 第六行 3 张
+  { name: 'Gray Noise Medium',file: 'ad56fba948dfba9ae698198c109e71f118a54d209c0ea50d77ea546abad89c57.png' },
+  { name: 'RGBA Noise Medium',file: 'f735bee5b64ef98879dc618b016ecf7939a5756040c2cde21ccb15e69a6e1cfb.png' },
+  { name: 'Organic 3',        file: '3083c722c0c738cad0f468383167a0d246f91af2bfa373e9c5c094fb8c8413e0.png' },
+  // 第七行 3 张
+  { name: 'Nyancat (Photo)',  file: '10eb4fe0ac8a7dc348a2cc282ca5df1759ab8bf680117e4047728100969e7b43.jpg' },
+  { name: 'RGBA Noise Small', file: '95b90082f799f48677b4f206d856ad572f1d178c676269eac6347631d4447258.jpg' },
+  { name: 'Rusty Metal',      file: 'e6e5631ce1237ae4c05b3563eda686400a401df4548d0f9fad40ecac1659c46c.jpg' },
+  // 第八行
+  { name: 'Stars',            file: '1f7dca9c22f324751f2a5a59c9b181dfe3b5564a04b724c657732d0bf09c99db.jpg' },
+];
+
+// ===== CubeMap（每组 6 面，_0 到 _5） =====
+const CUBES = [
+  { name: 'Forest',
+    base: '94284d43be78f00eb6b298e6d78656a1b34e2b91b34940d02f1ca8b22310e8a0', ext: 'png' },
+  { name: 'St Peters Basilica',
+    base: '0681c014f6c88c356cf9c0394ffe015acc94ec1474924855f45d22c3e70b5785', ext: 'png' },
+  { name: 'Forest Path',
+    base: '488bd40303a2e2b9a71987e48c66ef41f5e937174bf316d3ed0e86410784b919', ext: 'jpg' },
+  { name: 'Gallery',
+    base: '550a8cce1bf403869fde66dddf6028dd171f1852f4a704a465e1b80d23955663', ext: 'png' },
+  { name: 'Basilica',
+    base: '585f9546c092f53ded45332b343144396c0b2d70d9965f585ebc172080d8aa58', ext: 'jpg' },
+  { name: 'Uffizi Gallery',
+    base: '793a105653fbdadabdc1325ca08675e1ce48ae5f12e37973829c87bea4be3232', ext: 'png' },
+];
+
+// ===== 3D Volumes =====
+const VOLS = [
+  { name: 'Grey Noise 3D',  file: '27012b4eadd0c3ce12498b867058e4f717ce79e10a99568cca461682d84a4b04.bin' },
+  { name: 'RGBA Noise 3D',  file: 'aea6b99da1d53055107966b59ac5444fc8bc7b3ce2d0bbb6a4a3cbae1d97f3aa.bin' },
+];
+
+// ===== Videos =====
+const VIDS = [
+  { name: '1961 Commercial',    file: '3405e48f74815c7baa49133bdc835142948381fbe003ad2f12f5087715731153.ogv' },
+  { name: 'Britney Spears',     file: 'e81e818ac76a8983d746784b423178ee9f6cdcdf7f8e8d719341a6fe2d2ab303.webm' },
+  { name: 'Claude Van Damme',   file: '35c87bcb8d7af24c54d41122dadb619dd920646a0bd0e477e7bdc6d12876df17.webm' },
+  { name: 'Google Logo',        file: 'c3a071ecf273428bc72fc72b2dd972671de8da420a2d4f917b75d20e1c24b34c.ogv' },
+];
+
+// ===== Music =====
+const MUSIC = [
+  { name: '8 Bit Mentality',       file: 'a6a1cf7a09adfed8c362492c88c30d74fb3d2f4f7ba180ba34b98556660fada1.mp3' },
+  { name: 'ElectroNebulae',        file: '3c33c415862bb7964d256f4749408247da6596f2167dca2c86cc38f83c244aa6.mp3' },
+  { name: 'Experiment',            file: '29de534ed5e4a6a224d2dfffab240f2e19a9d95f5e39de8898e850efdb2a99de.mp3' },
+  { name: 'Most Geometric Person', file: '48e2d9ef22ca6673330b8c38a260c87694d2bbc94c19fec9dfa4a1222c364a99.mp3' },
+  { name: 'Tropical Beeper',       file: 'd96b229eeb7a08d53adfcf1ff89e54c9ffeebed193d317d1a01cc8125c0f5cca.mp3' },
+  { name: "X'trackTure",           file: '894a09f482fb9b2822c093630fc37f0ce6cfec02b652e4e341323e4b6e4a4543.mp3' },
+  { name: 'Ourpithyator',          file: 'ec8a6ea755d34600547a5353f21f0a453f9f55ff95514383b2d80b8d71283eda.mp3' },
+];
+
+// ===== 渲染 =====
+function texCard(t) {
+  const url = `${B}/${t.file}`;
+  const short = t.file.substring(0, 12) + '...' + t.file.substring(t.file.lastIndexOf('.'));
+  return `<div class="card">
+    <a href="${url}" target="_blank"><img src="${url}" alt="${t.name}" loading="lazy"
+       onerror="this.style.height='60px';this.style.background='#333'"></a>
+    <div class="info"><div class="name">${t.name}</div><div class="hash">${short}</div></div>
+    <a class="dl" href="${url}" target="_blank">打开原图</a></div>`;
+}
+
+document.getElementById('tex-grid').innerHTML = TEX.map(texCard).join('');
+
+// CubeMap
+document.getElementById('cube-area').innerHTML = CUBES.map(c => {
+  const faces = ['_0 (+X)','_1 (-X)','_2 (+Y)','_3 (-Y)','_4 (+Z)','_5 (-Z)'];
+  // 面0无后缀，面1-5有后缀 _1 到 _5
+  const imgs = [];
+  // 面 0（原始文件名无后缀）
+  imgs.push(`<a href="${B}/${c.base}.${c.ext}" target="_blank"><img src="${B}/${c.base}.${c.ext}" alt="+X" title="+X" loading="lazy" onerror="this.style.background='#333'"></a>`);
+  for (let i = 1; i <= 5; i++) {
+    const f = `${c.base}_${i}.${c.ext}`;
+    const label = faces[i];
+    imgs.push(`<a href="${B}/${f}" target="_blank"><img src="${B}/${f}" alt="${label}" title="${label}" loading="lazy" onerror="this.style.background='#333'"></a>`);
+  }
+  return `<div class="cube-group"><div class="cube-label">${c.name} (${c.ext})</div>${imgs.join('')}</div>`;
+}).join('');
+
+// Volumes
+document.getElementById('vol-list').innerHTML = VOLS.map(v =>
+  `<li><a href="${B}/${v.file}" target="_blank">${v.name}</a> <span style="color:#666">(${v.file})</span></li>`
+).join('');
+
+// Videos
+document.getElementById('vid-list').innerHTML = VIDS.map(v =>
+  `<li><a href="${B}/${v.file}" target="_blank">${v.name}</a> <span style="color:#666">(${v.file.split('.').pop()})</span></li>`
+).join('');
+
+// Music
+document.getElementById('music-list').innerHTML = MUSIC.map(m =>
+  `<li><a href="${B}/${m.file}" target="_blank">${m.name}</a></li>`
+).join('');
+</script>
+</body>
+</html>

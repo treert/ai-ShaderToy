@@ -407,7 +407,15 @@ int main(int argc, char* argv[]) {
     const auto& projData = project.GetData();
 
     // 单文件模式：使用命令行 --channel0~3 参数
-    if (!projData.isMultiPass && projData.commonSource.empty()) {
+    // 仅当 imagePass 没有任何通道绑定时才走命令行参数（真正的单 .glsl 文件）
+    bool hasChannelBindings = false;
+    for (int i = 0; i < 4; ++i) {
+        if (projData.imagePass.channels[i].source != ChannelBinding::Source::None) {
+            hasChannelBindings = true;
+            break;
+        }
+    }
+    if (!hasChannelBindings && !projData.isMultiPass && projData.commonSource.empty()) {
         std::string channelPaths[4] = {config.channel0, config.channel1, config.channel2, config.channel3};
         for (int i = 0; i < 4; ++i) {
             if (channelPaths[i].empty()) continue;

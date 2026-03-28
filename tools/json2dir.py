@@ -307,7 +307,7 @@ def _parse_inputs(rp: dict, output_id_map: dict, cubemap_pass_index: int = 10) -
             result.append((channel, {"type": "texture", "path": input_path}))
 
         elif input_type == "cubemap":
-            result.append((channel, {"type": "texture", "path": input_path}))
+            result.append((channel, {"type": "cubemap", "path": input_path}))
 
         elif input_type == "keyboard":
             # 静默忽略
@@ -328,6 +328,9 @@ def _add_pass_channels(channels: dict, pass_name: str, inputs: list):
         ch_key = f"iChannel{channel}"
         if binding["type"] == "buffer":
             pass_channels[ch_key] = binding["buffer"]
+        elif binding["type"] == "cubemap":
+            # cubemap 纹理用对象格式保留类型信息
+            pass_channels[ch_key] = {"path": binding["path"], "type": "cubemap"}
         elif binding["type"] == "texture":
             pass_channels[ch_key] = binding["path"]
     if pass_channels:

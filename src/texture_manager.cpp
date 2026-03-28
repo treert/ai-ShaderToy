@@ -2,6 +2,8 @@
 #include <iostream>
 #include <cstring>
 #include <vector>
+#include <fstream>
+#include <string>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -128,7 +130,73 @@ bool TextureManager::LoadCubeMap(int channel, const std::string& filePath) {
         return true;
     }
 
-    // 方式2：单张图片，自动检测布局并切割
+    // 方式2：ShaderToy 风格的 6 面文件（base_1.ext ~ base_5.ext，base.ext 为 face 0）
+    // 检查是否存在 _1 后缀的文件
+    {
+        std::string ext;
+        std::string base;
+        size_t dotPos = filePath.rfind('.');
+        if (dotPos != std::string::npos) {
+            ext = filePath.substr(dotPos);  // ".png"
+            base = filePath.substr(0, dotPos);  // "/path/to/hash"
+        }
+
+        std::string face1Path = base + "_1" + ext;
+        std::ifstream testFile(face1Path);
+        if (!ext.empty() && testFile.good()) {
+            testFile.close();
+
+            // ShaderToy cubemap: face 0 = base.ext, face 1~5 = base_1.ext ~ base_5.ext
+            // OpenGL face order: +X(0), -X(1), +Y(2), -Y(3), +Z(4), -Z(5)
+            GLuint tex;
+            glGenTextures(1, &tex);
+            glBindTexture(GL_TEXTURE_CUBE_MAP, tex);
+
+            stbi_set_flip_vertically_on_load(false);
+            int faceSize = 0;
+            bool ok = true;
+            for (int i = 0; i < 6; ++i) {
+                std::string facePath = (i == 0) ? filePath : (base + "_" + std::to_string(i) + ext);
+
+                int w, h, nc;
+                unsigned char* data = stbi_load(facePath.c_str(), &w, &h, &nc, 4);
+                if (!data) {
+                    std::cerr << "Failed to load cubemap face " << i << ": " << facePath
+                              << " (" << stbi_failure_reason() << ")" << std::endl;
+                    glDeleteTextures(1, &tex);
+                    ok = false;
+                    break;
+                }
+                if (i == 0) faceSize = w;
+                glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGBA8, w, h, 0,
+                             GL_RGBA, GL_UNSIGNED_BYTE, data);
+                stbi_image_free(data);
+            }
+
+            if (ok) {
+                glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+                glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
+                glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+
+                ch.texture = tex;
+                ch.width = faceSize;
+                ch.height = faceSize;
+                ch.isOwned = true;
+                ch.type = ChannelType::CubeMap;
+
+                std::cout << "CubeMap loaded (6 face files): channel " << channel
+                          << " [" << faceSize << "x" << faceSize << "] " << filePath << std::endl;
+                return true;
+            }
+            // 如果面文件加载失败，fall through 到方式3（单张图片）
+        }
+    }
+
+    // 方式3：单张图片，自动检测布局并切割
     stbi_set_flip_vertically_on_load(false);
     int imgW, imgH, nc;
     unsigned char* data = stbi_load(filePath.c_str(), &imgW, &imgH, &nc, 4);

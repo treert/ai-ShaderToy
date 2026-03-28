@@ -390,8 +390,20 @@ bool ShaderProject::LoadFromDirectory(const std::string& dirPath) {
                     std::string chKey = "iChannel" + std::to_string(ch);
                     if (!passConf.contains(chKey)) continue;
 
-                    std::string value = passConf[chKey].get<std::string>();
+                    const auto& chVal = passConf[chKey];
                     auto& binding = pass.channels[ch];
+
+                    // 支持两种格式：
+                    //   字符串: "buf_a" 或 "/media/a/xxx.jpg"
+                    //   对象:   {"path": "/media/a/xxx.png", "type": "cubemap"}
+                    std::string value;
+                    std::string texType;
+                    if (chVal.is_object()) {
+                        value = chVal.value("path", "");
+                        texType = chVal.value("type", "");
+                    } else {
+                        value = chVal.get<std::string>();
+                    }
 
                     // 检查是否引用 buffer
                     if (value == "buf_a" || value == "buffer_a" || value == "Buffer A") {
@@ -410,21 +422,12 @@ bool ShaderProject::LoadFromDirectory(const std::string& dirPath) {
                         binding.source = ChannelBinding::Source::CubeMapPass;
                         binding.textureType = ChannelType::CubeMap;
                     } else {
-                        // 视为外部纹理路径
+                        // 视为外部纹理路径，使用统一路径解析
                         binding.source = ChannelBinding::Source::ExternalTexture;
-                        // 如果是相对路径，相对于目录解析
-                        fs::path texPath(value);
-                        if (texPath.is_relative()) {
-                            fs::path resolved = dir / texPath;
-                            if (fs::exists(resolved)) {
-                                binding.texturePath = resolved.string();
-                            } else {
-                                binding.texturePath = value;  // 保留原始
-                            }
-                        } else {
-                            binding.texturePath = value;
-                        }
-                        binding.textureType = ChannelType::Texture2D;
+                        binding.texturePath = ResolveTexturePath(value, dirPath);
+                        // 根据 type 字段判断纹理类型
+                        binding.textureType = (texType == "cubemap")
+                            ? ChannelType::CubeMap : ChannelType::Texture2D;
                     }
                 }
             };
