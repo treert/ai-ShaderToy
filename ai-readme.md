@@ -40,8 +40,9 @@
 ### 阶段 3：调试 UI ✅ 已完成
 - [x] 集成 Dear ImGui（FetchContent 自动下载，SDL2+OpenGL3 后端）
 - [x] 窗口模式调试面板（Tab 键切换显隐）
-- [x] 信息展示：FPS/帧率、shader 路径/状态、iResolution/iTime/iMouse 等 uniform 值
+- [x] 信息展示：FPS/帧率、RenderTime（实际渲染耗时）、shader 路径/状态、iResolution/iTime/iMouse 等 uniform 值
 - [x] 编译错误信息展示（红色高亮）
 - [x] 控制按钮：重载 shader、暂停/恢复、重置时间
 - [x] 滑条调节：目标 FPS（15~120）、renderScale（0.1~1.0）
 - [x] Shader 选择器：列出 assets/shaders/*.glsl 文件，点击切换
+- [x] 壁纸模式 Debug 叠加（--debug 参数，只读纯文字叠加，默认关闭）

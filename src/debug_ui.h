@@ -11,6 +11,7 @@ struct DebugUIState {
     float adaptiveFPS   = 0.0f;
     float currentTime   = 0.0f;
     float timeDelta     = 0.0f;
+    float renderTime    = 0.0f;   // 实际渲染耗时（秒）
     int   frameCount    = 0;
     float resolution[2] = {0.0f, 0.0f};
     float mouse[4]      = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -53,6 +54,9 @@ public:
     /// 绘制调试面板并提交渲染
     void Render(DebugUIState& state);
 
+    /// 只读叠加渲染（壁纸模式用），固定位置纯文字显示，不含交互控件
+    void RenderOverlay(const DebugUIState& state);
+
     /// 面板是否可见
     bool IsVisible() const { return visible_; }
 
@@ -72,9 +76,13 @@ private:
     bool initialized_ = false;
     bool visible_     = false;
 
+    // EMA 平滑（统一更新）
+    void UpdateSmoothing(const DebugUIState& state);
+
     // 平滑显示值（EMA）
     float smoothFPS_       = 0.0f;
     float smoothFrameTime_ = 0.0f;
-    float smoothTimeDelta_ = 0.0f;
-    bool  smoothInited_    = false;
+    float smoothTimeDelta_  = 0.0f;
+    float smoothRenderTime_ = 0.0f;
+    bool  smoothInited_     = false;
 };

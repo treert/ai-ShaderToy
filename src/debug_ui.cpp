@@ -63,23 +63,26 @@ void DebugUI::BeginFrame() {
     ImGui::NewFrame();
 }
 
+void DebugUI::UpdateSmoothing(const DebugUIState& state) {
+    constexpr float kSmooth = 0.05f;
+    if (!smoothInited_) {
+        smoothFPS_        = state.fps;
+        smoothFrameTime_  = state.timeDelta * 1000.0f;
+        smoothTimeDelta_  = state.timeDelta;
+        smoothRenderTime_ = state.renderTime * 1000.0f;
+        smoothInited_     = true;
+    } else {
+        smoothFPS_        += kSmooth * (state.fps - smoothFPS_);
+        smoothFrameTime_  += kSmooth * (state.timeDelta * 1000.0f - smoothFrameTime_);
+        smoothTimeDelta_  += kSmooth * (state.timeDelta - smoothTimeDelta_);
+        smoothRenderTime_ += kSmooth * (state.renderTime * 1000.0f - smoothRenderTime_);
+    }
+}
+
 void DebugUI::Render(DebugUIState& state) {
     if (!initialized_) return;
 
-    // EMA 平滑（smoothing factor 越小越平滑）
-    {
-        constexpr float kSmooth = 0.05f;
-        if (!smoothInited_) {
-            smoothFPS_       = state.fps;
-            smoothFrameTime_ = state.timeDelta * 1000.0f;
-            smoothTimeDelta_ = state.timeDelta;
-            smoothInited_    = true;
-        } else {
-            smoothFPS_       += kSmooth * (state.fps - smoothFPS_);
-            smoothFrameTime_ += kSmooth * (state.timeDelta * 1000.0f - smoothFrameTime_);
-            smoothTimeDelta_ += kSmooth * (state.timeDelta - smoothTimeDelta_);
-        }
-    }
+    UpdateSmoothing(state);
 
     if (visible_) {
         ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
@@ -95,6 +98,7 @@ void DebugUI::Render(DebugUIState& state) {
             ImGui::Text("FPS: %.1f  (adaptive: %.1f, target: %d)",
                         smoothFPS_, state.adaptiveFPS, state.targetFPS);
             ImGui::Text("Frame Time: %.3f ms", smoothFrameTime_);
+            ImGui::Text("RenderTime: %.3f ms", smoothRenderTime_);
             ImGui::Separator();
             ImGui::Text("Shader: %s", state.shaderPath);
             ImGui::Text("Status: %s",
@@ -102,7 +106,6 @@ void DebugUI::Render(DebugUIState& state) {
             ImGui::Separator();
             ImGui::Text("iResolution: %.0f x %.0f", state.resolution[0], state.resolution[1]);
             ImGui::Text("iTime:      %.3f", state.currentTime);
-            ImGui::Text("iTimeDelta: %.4f", smoothTimeDelta_);
             ImGui::Text("iFrame:     %d", state.frameCount);
             ImGui::Text("iMouse:     (%.0f, %.0f, %.0f, %.0f)",
                         state.mouse[0], state.mouse[1], state.mouse[2], state.mouse[3]);
@@ -191,6 +194,50 @@ void DebugUI::Render(DebugUIState& state) {
 
         ImGui::End();
     }
+
+    // 提交渲染
+    ImGui::Render();
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+}
+
+void DebugUI::RenderOverlay(const DebugUIState& state) {
+    if (!initialized_) return;
+
+    UpdateSmoothing(state);
+
+    // 固定右上角、无标题栏、不可交互的叠加窗口
+    ImVec2 displaySize = ImGui::GetIO().DisplaySize;
+    ImGui::SetNextWindowPos(ImVec2(displaySize.x - 10, 10), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.5f);
+    ImGui::Begin("##DebugOverlay", nullptr,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs |
+                 ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
+
+    ImGui::Text("FPS: %.1f  (adaptive: %.1f, target: %d)",
+                smoothFPS_, state.adaptiveFPS, state.targetFPS);
+    ImGui::Text("Frame Time: %.3f ms", smoothFrameTime_);
+    ImGui::Text("RenderTime: %.3f ms", smoothRenderTime_);
+    ImGui::Separator();
+    ImGui::Text("Shader: %s", state.shaderPath);
+    ImGui::Text("Status: %s",
+                (state.shaderError && state.shaderError[0] != '\0') ? "ERROR" : "OK");
+    ImGui::Separator();
+    ImGui::Text("iResolution: %.0f x %.0f", state.resolution[0], state.resolution[1]);
+    ImGui::Text("iTime:      %.3f", state.currentTime);
+    ImGui::Text("iFrame:     %d", state.frameCount);
+    ImGui::Text("iMouse:     (%.0f, %.0f, %.0f, %.0f)",
+                state.mouse[0], state.mouse[1], state.mouse[2], state.mouse[3]);
+
+    // 错误信息
+    if (state.shaderError && state.shaderError[0] != '\0') {
+        ImGui::Separator();
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+        ImGui::TextWrapped("Shader Error:\n%s", state.shaderError);
+        ImGui::PopStyleColor();
+    }
+
+    ImGui::End();
 
     // 提交渲染
     ImGui::Render();

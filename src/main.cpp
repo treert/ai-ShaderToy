@@ -38,6 +38,7 @@ struct AppConfig {
         ChannelType::Texture2D, ChannelType::Texture2D
     };
     bool        wallpaperMode = false;
+    bool        showDebug = false;   // 壁纸模式下显示只读 Debug 信息（--debug）
     bool        hotReload = true;
     int         width  = kDefaultWidth;
     int         height = kDefaultHeight;
@@ -76,6 +77,7 @@ static void PrintUsage(const char* programName) {
               << "  --height <n>         Window height (default: " << kDefaultHeight << ")\n"
               << "  --fps <n>            Target FPS (wallpaper default: 30, window default: 60)\n"
               << "  --renderscale <f>    Render resolution scale 0.0-1.0 (wallpaper default: 0.5, window default: 1.0)\n"
+              << "  --debug              Show debug overlay in wallpaper mode (default: off)\n"
               << "  --help, -h           Show this help\n";
 }
 
@@ -118,6 +120,8 @@ static AppConfig ParseArgs(int argc, char* argv[]) {
             config.renderScale = static_cast<float>(std::atof(argv[++i]));
             if (config.renderScale < 0.1f) config.renderScale = 0.1f;
             if (config.renderScale > 1.0f) config.renderScale = 1.0f;
+        } else if (arg == "--debug") {
+            config.showDebug = true;
         } else if (arg == "--help" || arg == "-h") {
             PrintUsage(argv[0]);
             exit(0);
@@ -454,7 +458,7 @@ int main(int argc, char* argv[]) {
     }
 
     // ============================================================
-    // 调试 UI（仅窗口模式）
+    // 调试 UI（窗口模式始终初始化，壁纸模式仅 --debug 时初始化）
     // ============================================================
     DebugUI debugUI;
     DebugUIState debugState;
@@ -484,6 +488,12 @@ int main(int argc, char* argv[]) {
         ScanShaderFiles();
         debugState.targetFPS = config.targetFPS;
         debugState.renderScale = config.renderScale;
+    } else if (config.showDebug) {
+        // 壁纸模式 + --debug：初始化 ImGui 用于只读叠加显示
+        if (!debugUI.Init(wallpaperWindows[0].window, glContext)) {
+            std::cerr << "DebugUI init failed (wallpaper mode), continuing without debug overlay." << std::endl;
+            config.showDebug = false;
+        }
     }
 
     // ============================================================
@@ -534,6 +544,23 @@ int main(int argc, char* argv[]) {
     float mouse[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     bool mousePressed = false;
     float clickTime = -10.0f;  // 最近一次点击的 iTime，初始设为远过去
+
+    // 统一填充 debugState 的公共字段
+    auto fillDebugState = [&](float fps, float time, float td, float rt,
+                              float resW, float resH, const float* m) {
+        debugState.fps         = fps;
+        debugState.adaptiveFPS = adaptiveFPS;
+        debugState.currentTime = time;
+        debugState.timeDelta   = td;
+        debugState.renderTime  = rt;
+        debugState.frameCount  = frameCount;
+        debugState.resolution[0] = resW;
+        debugState.resolution[1] = resH;
+        std::copy(m, m + 4, std::begin(debugState.mouse));
+        debugState.shaderPath  = config.shaderPath.c_str();
+        debugState.shaderError = lastShaderError.c_str();
+        debugState.paused      = paused.load();
+    };
 
     while (running) {
         // 事件处理
@@ -732,23 +759,26 @@ int main(int argc, char* argv[]) {
         // 暂停时跳过 shader 渲染，但仍渲染 DebugUI
         if (paused) {
             if (!config.wallpaperMode) {
-                // 填充 DebugUI 状态
-                debugState.fps = 0.0f;
-                debugState.adaptiveFPS = adaptiveFPS;
-                debugState.currentTime = lastFrameTime;
-                debugState.timeDelta = 0.0f;
-                debugState.frameCount = frameCount;
-                debugState.resolution[0] = static_cast<float>(config.width);
-                debugState.resolution[1] = static_cast<float>(config.height);
-                std::copy(std::begin(mouse), std::end(mouse), std::begin(debugState.mouse));
-                debugState.shaderPath = config.shaderPath.c_str();
-                debugState.shaderError = lastShaderError.c_str();
-                debugState.paused = paused.load();
+                fillDebugState(0.0f, lastFrameTime, 0.0f, 0.0f,
+                               static_cast<float>(config.width),
+                               static_cast<float>(config.height), mouse);
 
                 debugUI.BeginFrame();
                 debugUI.Render(debugState);
                 SDL_GL_SwapWindow(window);
             } else {
+                if (config.showDebug) {
+                    for (auto& ww : wallpaperWindows) {
+                        SDL_GL_MakeCurrent(ww.window, glContext);
+                        fillDebugState(0.0f, lastFrameTime, 0.0f, 0.0f,
+                                       static_cast<float>(ww.width),
+                                       static_cast<float>(ww.height), mouse);
+
+                        debugUI.BeginFrame();
+                        debugUI.RenderOverlay(debugState);
+                        SDL_GL_SwapWindow(ww.window);
+                    }
+                }
                 SDL_Delay(100);
             }
             continue;
@@ -890,6 +920,21 @@ int main(int argc, char* argv[]) {
                     renderer.RenderFrame(shader, currentTime, timeDelta, frameCount,
                                         localMouse, date);
                 }
+
+                // 壁纸模式 Debug 叠加
+                if (config.showDebug) {
+                    Uint64 renderEnd = SDL_GetPerformanceCounter();
+                    float renderElapsed = static_cast<float>(renderEnd - now) / static_cast<float>(freq);
+                    float curFps = (timeDelta > 0.0f) ? (1.0f / timeDelta) : 0.0f;
+
+                    fillDebugState(curFps, currentTime, timeDelta, renderElapsed,
+                                   static_cast<float>(ww.width),
+                                   static_cast<float>(ww.height), localMouse);
+
+                    debugUI.BeginFrame();
+                    debugUI.RenderOverlay(debugState);
+                }
+
                 SDL_GL_SwapWindow(ww.window);
             }
         } else {
@@ -922,17 +967,13 @@ int main(int argc, char* argv[]) {
 
             // DebugUI 渲染（在 shader 渲染后、SwapWindow 前）
             {
-                debugState.fps = (timeDelta > 0.0f) ? (1.0f / timeDelta) : 0.0f;
-                debugState.adaptiveFPS = adaptiveFPS;
-                debugState.currentTime = currentTime;
-                debugState.timeDelta = timeDelta;
-                debugState.frameCount = frameCount;
-                debugState.resolution[0] = static_cast<float>(config.width);
-                debugState.resolution[1] = static_cast<float>(config.height);
-                std::copy(std::begin(mouse), std::end(mouse), std::begin(debugState.mouse));
-                debugState.shaderPath = config.shaderPath.c_str();
-                debugState.shaderError = lastShaderError.c_str();
-                debugState.paused = paused.load();
+                Uint64 renderEnd = SDL_GetPerformanceCounter();
+                float renderElapsed = static_cast<float>(renderEnd - now) / static_cast<float>(freq);
+                float curFps = (timeDelta > 0.0f) ? (1.0f / timeDelta) : 0.0f;
+
+                fillDebugState(curFps, currentTime, timeDelta, renderElapsed,
+                               static_cast<float>(config.width),
+                               static_cast<float>(config.height), mouse);
 
                 debugUI.BeginFrame();
                 debugUI.Render(debugState);

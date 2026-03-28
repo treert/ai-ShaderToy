@@ -6,9 +6,9 @@
 
 ### 1. 信息展示面板
 
-- **FPS/帧率信息**：当前实时帧率、自适应帧率、目标帧率、帧时间（timeDelta）
+- **FPS/帧率信息**：当前实时帧率、自适应帧率、目标帧率、帧时间（Frame Time）、实际渲染耗时（RenderTime）
 - **Shader 状态**：当前 shader 文件路径、编译状态（成功/失败）
-- **Uniform 值监控**：iResolution、iTime、iTimeDelta、iFrame、iMouse 等实时值
+- **Uniform 值监控**：iResolution、iTime、iFrame、iMouse 等实时值
 - **编译错误信息**：shader 编译/链接失败时，以醒目红色文字显示完整错误信息
 
 ### 2. 调试控制功能
@@ -24,7 +24,7 @@
 
 - 默认隐藏，按 Tab 键切换显示/隐藏
 - 半透明覆盖在 shader 渲染画面左上角
-- 仅在窗口模式下生效，壁纸模式不加载 UI
+- 壁纸模式通过 `--debug` 参数启用只读叠加（右上角半透明，不可交互）
 
 ## 技术栈
 
@@ -90,7 +90,7 @@ graph TD
 
 4. **Shader 目录扫描**：使用 C++17 `std::filesystem::directory_iterator` 扫描 `assets/shaders/` 目录。在 ImGui 面板打开时执行扫描（或有缓存+手动刷新按钮），避免每帧 IO 开销。
 
-5. **壁纸模式零开销**：通过 `!config.wallpaperMode` 条件，壁纸模式下完全跳过 ImGui 初始化和渲染。
+5. **壁纸模式 Debug 叠加**：壁纸模式 + `--debug` 时初始化 ImGui，通过 `RenderOverlay()` 渲染只读信息叠加。未加 `--debug` 时完全跳过 ImGui 初始化，零开销。
 
 6. **CMake ImGui 集成**：ImGui 不提供官方 CMakeLists.txt，需在 FetchContent 后手动添加源文件列表：`imgui.cpp, imgui_draw.cpp, imgui_tables.cpp, imgui_widgets.cpp, imgui_demo.cpp`（核心）+ `backends/imgui_impl_sdl2.cpp, backends/imgui_impl_opengl3.cpp`（后端）。
 
@@ -177,7 +177,8 @@ struct DebugUIState {
     float fps;                  // 当前实时帧率 (1/timeDelta)
     float adaptiveFPS;          // 自适应帧率
     float currentTime;          // iTime
-    float timeDelta;            // iTimeDelta
+    float timeDelta;            // iTimeDelta（帧间隔，含 delay）
+    float renderTime;           // 实际渲染耗时（秒，不含 delay）
     int   frameCount;           // iFrame
     float resolution[2];        // iResolution xy
     float mouse[4];             // iMouse xyzw
@@ -197,6 +198,10 @@ struct DebugUIState {
     // === Shader 文件列表（main.cpp 填充，DebugUI 读取展示） ===
     std::vector<std::string> shaderFiles; // assets/shaders/ 下的 .glsl 文件列表
 };
+
+/// DebugUI 内部通过 UpdateSmoothing() 统一 EMA 平滑：
+///   smoothFPS_, smoothFrameTime_, smoothTimeDelta_, smoothRenderTime_
+/// main.cpp 通过 fillDebugState lambda 统一填充 debugState，消除重复代码。
 ```
 
 ## Agent Extensions
