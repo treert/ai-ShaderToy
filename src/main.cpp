@@ -540,7 +540,7 @@ int main(int argc, char* argv[]) {
     Uint32 fullscreenCheckTimer = 0;  // 全屏检测计时
     bool autoPaused = false;          // 因全屏应用而自动暂停
 
-    // FPS 统计（帧计数法，每秒更新一次，比 1/timeDelta 更准确）
+    // FPS 统计（滑动帧计数法：累计 N 帧后更新，低帧率时也稳定）
     float measuredFPS = 0.0f;
     int fpsFrameCount = 0;
     Uint64 fpsLastTime = SDL_GetPerformanceCounter();
@@ -822,6 +822,16 @@ int main(int argc, char* argv[]) {
         float timeDelta = currentTime - lastFrameTime;
         lastFrameTime = currentTime;
 
+        // FPS 统计：累计足够帧数后更新（高帧率约1秒更新，低帧率每3帧更新）
+        fpsFrameCount++;
+        float fpsElapsed = static_cast<float>(now - fpsLastTime) / static_cast<float>(freq);
+        int fpsUpdateInterval = std::max(3, static_cast<int>(adaptiveFPS));
+        if (fpsFrameCount >= fpsUpdateInterval) {
+            measuredFPS = static_cast<float>(fpsFrameCount) / fpsElapsed;
+            fpsFrameCount = 0;
+            fpsLastTime = now;
+        }
+
         // iDate: 年/月/日/当天已过秒数
         time_t rawTime = std::time(nullptr);
         struct tm localTm;
@@ -980,16 +990,6 @@ int main(int argc, char* argv[]) {
             SDL_GL_SwapWindow(window);
         }
         frameCount++;
-
-        // FPS 帧计数统计（每秒更新一次）
-        fpsFrameCount++;
-        Uint64 fpsNow = SDL_GetPerformanceCounter();
-        float fpsElapsed = static_cast<float>(fpsNow - fpsLastTime) / static_cast<float>(freq);
-        if (fpsElapsed >= 1.0f) {
-            measuredFPS = static_cast<float>(fpsFrameCount) / fpsElapsed;
-            fpsFrameCount = 0;
-            fpsLastTime = fpsNow;
-        }
 
         // 帧率自适应 + 帧率控制
         if (config.targetFPS > 0) {
