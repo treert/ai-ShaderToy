@@ -47,6 +47,7 @@ struct AppConfig {
     int         height = kDefaultHeight;
     int         targetFPS = -1;      // -1 表示未指定，壁纸模式默认30，窗口模式默认60
     float       renderScale = 0.0f;  // 渲染分辨率缩放，0=自动（壁纸模式0.5，窗口模式1.0）
+    int         monitorIndex = -1;   // 壁纸模式：指定显示器索引，-1=所有显示器
 };
 
 /// 确保有控制台可以输出（WIN32 子系统默认没有控制台）
@@ -75,6 +76,7 @@ static void PrintUsage(const char* programName) {
               << "  --channeltype2 <t>   iChannel2 type: 2d (default), cube\n"
               << "  --channeltype3 <t>   iChannel3 type: 2d (default), cube\n"
               << "  --wallpaper          Run as desktop wallpaper\n"
+              << "  --monitor <n>        Wallpaper monitor index (0,1,2...; default: all monitors)\n"
               << "  --no-hotreload       Disable shader hot reload\n"
               << "  --width <n>          Window width (default: " << kDefaultWidth << ")\n"
               << "  --height <n>         Window height (default: " << kDefaultHeight << ")\n"
@@ -111,6 +113,8 @@ static AppConfig ParseArgs(int argc, char* argv[]) {
             }
         } else if (arg == "--wallpaper") {
             config.wallpaperMode = true;
+        } else if (arg == "--monitor" && i + 1 < argc) {
+            config.monitorIndex = std::atoi(argv[++i]);
         } else if (arg == "--no-hotreload") {
             config.hotReload = false;
         } else if (arg == "--width" && i + 1 < argc) {
@@ -180,7 +184,18 @@ int main(int argc, char* argv[]) {
         // 允许共享 GL 上下文
         SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
 
+        // --monitor 参数校验
+        if (config.monitorIndex >= static_cast<int>(monitors.size())) {
+            std::cerr << "Monitor index " << config.monitorIndex
+                      << " out of range (0~" << monitors.size() - 1 << "), using all monitors." << std::endl;
+            config.monitorIndex = -1;
+        }
+
         for (size_t i = 0; i < monitors.size(); ++i) {
+            // 如果指定了显示器索引，跳过其他显示器
+            if (config.monitorIndex >= 0 && static_cast<int>(i) != config.monitorIndex) {
+                continue;
+            }
             const auto& mon = monitors[i];
             Uint32 flags = SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_BORDERLESS;
 
@@ -192,8 +207,8 @@ int main(int argc, char* argv[]) {
                 continue;
             }
 
-            // 第一个窗口创建 GL 上下文
-            if (i == 0) {
+            // 第一个成功创建的窗口创建 GL 上下文
+            if (wallpaperWindows.empty() && !glContext) {
                 glContext = SDL_GL_CreateContext(win);
                 if (!glContext) {
                     std::cerr << "SDL_GL_CreateContext failed: " << SDL_GetError() << std::endl;
