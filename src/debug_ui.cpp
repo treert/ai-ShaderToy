@@ -167,38 +167,49 @@ void DebugUI::Render(DebugUIState& state) {
         }
 
         // ============================================================
-        // Shader 选择器
+        // Shader 选择器（三组可折叠列表）
         // ============================================================
-        if (ImGui::CollapsingHeader("Shader Selector", ImGuiTreeNodeFlags_DefaultOpen)) {
-            for (size_t i = 0; i < state.shaderFiles.size(); ++i) {
-                const auto& file = state.shaderFiles[i];
-                bool isCurrent = (state.shaderPath && file == state.shaderPath);
+        {
+            auto renderGroup = [&](const char* label, const std::vector<std::string>& files,
+                                   ImGuiTreeNodeFlags extraFlags = 0) {
+                if (files.empty()) return;
+                if (ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen | extraFlags)) {
+                    for (size_t i = 0; i < files.size(); ++i) {
+                        const auto& file = files[i];
+                        bool isCurrent = (state.shaderPath && file == state.shaderPath);
 
-                if (isCurrent) {
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 1.0f, 0.4f, 1.0f));
-                }
+                        if (isCurrent) {
+                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 1.0f, 0.4f, 1.0f));
+                        }
 
-                // 只显示文件名部分（去掉 assets/shaders/ 前缀）
-                std::string displayName = file;
-                auto slashPos = file.find_last_of("/\\");
-                if (slashPos != std::string::npos) {
-                    displayName = file.substr(slashPos + 1);
-                }
+                        std::string displayName = file;
+                        auto slashPos = file.find_last_of("/\\");
+                        if (slashPos != std::string::npos) {
+                            displayName = file.substr(slashPos + 1);
+                        }
 
-                if (isCurrent) {
-                    displayName = "> " + displayName + " (current)";
-                }
+                        if (isCurrent) {
+                            displayName = "> " + displayName + " (current)";
+                        }
 
-                if (ImGui::Selectable(displayName.c_str(), isCurrent)) {
-                    if (!isCurrent) {
-                        state.requestSwitchShader = file;
+                        ImGui::PushID(file.c_str());
+                        if (ImGui::Selectable(displayName.c_str(), isCurrent)) {
+                            if (!isCurrent) {
+                                state.requestSwitchShader = file;
+                            }
+                        }
+                        ImGui::PopID();
+
+                        if (isCurrent) {
+                            ImGui::PopStyleColor();
+                        }
                     }
                 }
+            };
 
-                if (isCurrent) {
-                    ImGui::PopStyleColor();
-                }
-            }
+            renderGroup("GLSL Single File", state.glslFiles);
+            renderGroup("JSON (ShaderToy)", state.jsonFiles);
+            renderGroup("Directory (Multi-file)", state.dirFiles);
         }
 
         // ============================================================

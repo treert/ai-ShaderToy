@@ -1,0 +1,21 @@
+{
+    "image": {
+        "iChannel0": "buf_a",
+        "iChannel1": "buf_b",
+        "iChannel2": "buf_c",
+        "iChannel3": "buf_d"
+    },
+    "buf_a": {
+        "iChannel1": "/media/a/e6e5631ce1237ae4c05b3563eda686400a401df4548d0f9fad40ecac1659c46c.jpg",
+        "iChannel3": "buf_a"
+    },
+    "buf_b": {
+        "iChannel0": "buf_a"
+    },
+    "buf_c": {
+        "iChannel0": "buf_b"
+    },
+    "buf_d": {
+        "iChannel0": "buf_c"
+    }
+}

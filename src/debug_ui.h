@@ -30,8 +30,10 @@ struct DebugUIState {
     bool requestResetTime = false;
     std::string requestSwitchShader;  // 非空 = 请求切换到该路径的 shader
 
-    // === Shader 文件列表（main.cpp 填充，DebugUI 读取展示） ===
-    std::vector<std::string> shaderFiles;
+    // === Shader 文件列表（main.cpp 填充，DebugUI 读取展示，按类型分组） ===
+    std::vector<std::string> glslFiles;     // 单文件 .glsl shader
+    std::vector<std::string> jsonFiles;     // ShaderToy JSON 导入
+    std::vector<std::string> dirFiles;      // 目录模式（含 image.glsl 的子目录）
 };
 
 /// DebugUI 封装 Dear ImGui 调试面板的全部逻辑。

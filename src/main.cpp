@@ -591,29 +591,35 @@ int main(int argc, char* argv[]) {
     DebugUIState debugState;
     std::string lastShaderError;
 
-    // 扫描 assets/shaders/ 目录获取所有 shader 文件（.glsl, .json, 子目录）
+    // 扫描 assets/shaders/ 目录获取所有 shader 文件，按类型分三组
     auto ScanShaderFiles = [&]() {
-        debugState.shaderFiles.clear();
+        debugState.glslFiles.clear();
+        debugState.jsonFiles.clear();
+        debugState.dirFiles.clear();
         const std::string shaderDir = "assets/shaders";
         std::error_code ec;
         if (std::filesystem::exists(shaderDir, ec)) {
             for (const auto& entry : std::filesystem::directory_iterator(shaderDir, ec)) {
                 if (entry.is_regular_file()) {
                     auto ext = entry.path().extension();
-                    if (ext == ".glsl" || ext == ".json") {
-                        std::string path = entry.path().generic_string();
-                        debugState.shaderFiles.push_back(path);
+                    std::string path = entry.path().generic_string();
+                    if (ext == ".glsl") {
+                        debugState.glslFiles.push_back(path);
+                    } else if (ext == ".json") {
+                        debugState.jsonFiles.push_back(path);
                     }
                 } else if (entry.is_directory()) {
                     // 目录模式：检查是否包含 image.glsl
                     auto imagePath = entry.path() / "image.glsl";
                     if (std::filesystem::exists(imagePath, ec)) {
                         std::string path = entry.path().generic_string();
-                        debugState.shaderFiles.push_back(path);
+                        debugState.dirFiles.push_back(path);
                     }
                 }
             }
-            std::sort(debugState.shaderFiles.begin(), debugState.shaderFiles.end());
+            std::sort(debugState.glslFiles.begin(), debugState.glslFiles.end());
+            std::sort(debugState.jsonFiles.begin(), debugState.jsonFiles.end());
+            std::sort(debugState.dirFiles.begin(), debugState.dirFiles.end());
         }
     };
 
