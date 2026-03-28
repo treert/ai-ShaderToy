@@ -17,6 +17,7 @@
 #include "wallpaper.h"
 #include "texture_manager.h"
 #include "multi_pass.h"
+#include "blit_renderer.h"
 #include "shader_project.h"
 #include "file_watcher.h"
 #include "tray_icon.h"
@@ -287,92 +288,21 @@ int main(int argc, char* argv[]) {
               << ", Render scale: " << config.renderScale << std::endl;
 
     // ============================================================
-    // 降分辨率渲染 FBO（renderScale < 1.0 时启用）
+    // 降分辨率渲染（renderScale < 1.0 时启用）
     // ============================================================
-    GLuint renderFBO = 0, renderTex = 0;
-    int renderWidth = config.width, renderHeight = config.height;
+    BlitRenderer blitRenderer;
     bool useScaledRender = (config.renderScale < 1.0f);
 
-    // 用于 blit FBO 到屏幕的简单着色器
-    GLuint blitProgram = 0, blitVAO = 0, blitVBO = 0;
-
-    auto CreateRenderFBO = [&](int w, int h) {
-        renderWidth = static_cast<int>(w * config.renderScale);
-        renderHeight = static_cast<int>(h * config.renderScale);
-        if (renderWidth < 1) renderWidth = 1;
-        if (renderHeight < 1) renderHeight = 1;
-
-        if (renderFBO) {
-            glDeleteFramebuffers(1, &renderFBO);
-            glDeleteTextures(1, &renderTex);
-        }
-        glGenFramebuffers(1, &renderFBO);
-        glGenTextures(1, &renderTex);
-
-        glBindTexture(GL_TEXTURE_2D, renderTex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, renderWidth, renderHeight, 0,
-                     GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-        glBindFramebuffer(GL_FRAMEBUFFER, renderFBO);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, renderTex, 0);
-
-        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-            std::cerr << "Render FBO incomplete!" << std::endl;
-            useScaledRender = false;
-        }
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    };
-
     if (useScaledRender) {
-        // 创建 blit 着色器
-        const char* blitVS =
-            "#version 330 core\n"
-            "layout(location=0) in vec2 aPos;\n"
-            "out vec2 vUV;\n"
-            "void main(){\n"
-            "  vUV = aPos * 0.5 + 0.5;\n"
-            "  gl_Position = vec4(aPos, 0.0, 1.0);\n"
-            "}\n";
-        const char* blitFS =
-            "#version 330 core\n"
-            "in vec2 vUV;\n"
-            "out vec4 fragColor;\n"
-            "uniform sampler2D uTex;\n"
-            "void main(){\n"
-            "  fragColor = texture(uTex, vUV);\n"
-            "}\n";
-
-        GLuint vs = glCreateShader(GL_VERTEX_SHADER);
-        glShaderSource(vs, 1, &blitVS, nullptr);
-        glCompileShader(vs);
-        GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
-        glShaderSource(fs, 1, &blitFS, nullptr);
-        glCompileShader(fs);
-        blitProgram = glCreateProgram();
-        glAttachShader(blitProgram, vs);
-        glAttachShader(blitProgram, fs);
-        glLinkProgram(blitProgram);
-        glDeleteShader(vs);
-        glDeleteShader(fs);
-
-        // blit 全屏四边形
-        float blitQuad[] = {-1,-1, 1,-1, -1,1, 1,-1, 1,1, -1,1};
-        glGenVertexArrays(1, &blitVAO);
-        glGenBuffers(1, &blitVBO);
-        glBindVertexArray(blitVAO);
-        glBindBuffer(GL_ARRAY_BUFFER, blitVBO);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(blitQuad), blitQuad, GL_STATIC_DRAW);
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
-        glEnableVertexAttribArray(0);
-        glBindVertexArray(0);
-
-        CreateRenderFBO(config.width, config.height);
-        std::cout << "Scaled rendering: " << renderWidth << "x" << renderHeight
-                  << " (scale=" << config.renderScale << ")" << std::endl;
+        if (!blitRenderer.Init()) {
+            std::cerr << "BlitRenderer init failed, disabling scaled rendering." << std::endl;
+            useScaledRender = false;
+        } else {
+            blitRenderer.CreateRenderFBO(config.width, config.height, config.renderScale);
+            std::cout << "Scaled rendering: " << blitRenderer.GetRenderWidth() << "x"
+                      << blitRenderer.GetRenderHeight()
+                      << " (scale=" << config.renderScale << ")" << std::endl;
+        }
     }
 
     // ============================================================
@@ -544,10 +474,10 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // 降分辨率模式：Image pass 渲染到 renderFBO
-        if (useScaledRender && renderFBO) {
-            multiPass.SetImageTargetFBO(renderFBO);
-            multiPass.Resize(renderWidth, renderHeight);
+        // 降分辨率模式：Image pass 渲染到 blitRenderer 的 FBO
+        if (useScaledRender && blitRenderer.GetRenderFBO()) {
+            multiPass.SetImageTargetFBO(blitRenderer.GetRenderFBO());
+            multiPass.Resize(blitRenderer.GetRenderWidth(), blitRenderer.GetRenderHeight());
         }
 
         return true;
@@ -763,9 +693,9 @@ int main(int argc, char* argv[]) {
                     config.height = event.window.data2;
                     renderer.SetViewport(config.width, config.height);
                     if (useScaledRender) {
-                        CreateRenderFBO(config.width, config.height);
-                        multiPass.Resize(renderWidth, renderHeight);
-                        multiPass.SetImageTargetFBO(renderFBO);
+                        blitRenderer.CreateRenderFBO(config.width, config.height, config.renderScale);
+                        multiPass.Resize(blitRenderer.GetRenderWidth(), blitRenderer.GetRenderHeight());
+                        multiPass.SetImageTargetFBO(blitRenderer.GetRenderFBO());
                     } else {
                         multiPass.Resize(config.width, config.height);
                     }
@@ -876,56 +806,17 @@ int main(int argc, char* argv[]) {
                 config.renderScale = debugState.renderScale;
                 bool newScaled = (config.renderScale < 1.0f);
                 if (newScaled && !useScaledRender) {
-                    // 需要创建 blit 资源（首次启用降分辨率）
-                    // 简化处理：标记 useScaledRender，FBO 在渲染时按需创建
                     useScaledRender = true;
-                    if (!blitProgram) {
-                        const char* blitVS =
-                            "#version 330 core\n"
-                            "layout(location=0) in vec2 aPos;\n"
-                            "out vec2 vUV;\n"
-                            "void main(){\n"
-                            "  vUV = aPos * 0.5 + 0.5;\n"
-                            "  gl_Position = vec4(aPos, 0.0, 1.0);\n"
-                            "}\n";
-                        const char* blitFS =
-                            "#version 330 core\n"
-                            "in vec2 vUV;\n"
-                            "out vec4 fragColor;\n"
-                            "uniform sampler2D uTex;\n"
-                            "void main(){\n"
-                            "  fragColor = texture(uTex, vUV);\n"
-                            "}\n";
-                        GLuint vs = glCreateShader(GL_VERTEX_SHADER);
-                        glShaderSource(vs, 1, &blitVS, nullptr);
-                        glCompileShader(vs);
-                        GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
-                        glShaderSource(fs, 1, &blitFS, nullptr);
-                        glCompileShader(fs);
-                        blitProgram = glCreateProgram();
-                        glAttachShader(blitProgram, vs);
-                        glAttachShader(blitProgram, fs);
-                        glLinkProgram(blitProgram);
-                        glDeleteShader(vs);
-                        glDeleteShader(fs);
-
-                        float blitQuad[] = {-1,-1, 1,-1, -1,1, 1,-1, 1,1, -1,1};
-                        glGenVertexArrays(1, &blitVAO);
-                        glGenBuffers(1, &blitVBO);
-                        glBindVertexArray(blitVAO);
-                        glBindBuffer(GL_ARRAY_BUFFER, blitVBO);
-                        glBufferData(GL_ARRAY_BUFFER, sizeof(blitQuad), blitQuad, GL_STATIC_DRAW);
-                        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
-                        glEnableVertexAttribArray(0);
-                        glBindVertexArray(0);
+                    if (!blitRenderer.IsInitialized()) {
+                        blitRenderer.Init();
                     }
                 } else if (!newScaled) {
                     useScaledRender = false;
                 }
                 if (useScaledRender) {
-                    CreateRenderFBO(config.width, config.height);
-                    multiPass.SetImageTargetFBO(renderFBO);
-                    multiPass.Resize(renderWidth, renderHeight);
+                    blitRenderer.CreateRenderFBO(config.width, config.height, config.renderScale);
+                    multiPass.SetImageTargetFBO(blitRenderer.GetRenderFBO());
+                    multiPass.Resize(blitRenderer.GetRenderWidth(), blitRenderer.GetRenderHeight());
                 } else {
                     multiPass.SetImageTargetFBO(0);
                     multiPass.Resize(config.width, config.height);
@@ -1034,23 +925,7 @@ int main(int argc, char* argv[]) {
         };
 
         // 获取全屏四边形 VAO（从 Renderer 借用）
-        // Renderer::Init() 创建的 VAO 在内部，通过 RenderFrame 使用
-        // MultiPassRenderer 需要 quadVAO —— 我们从 Renderer 获取
-        // 注意：Renderer 的 vao_ 是 private，我们需要直接使用它
-        // 为了最小化改动，我们在这里创建一个简单的 quadVAO
-        // （实际上 Renderer 已经有了，但它是 private 的）
-        static GLuint quadVAO = 0, quadVBO = 0;
-        if (quadVAO == 0) {
-            float quadVerts[] = {-1,-1, 1,-1, -1,1, 1,-1, 1,1, -1,1};
-            glGenVertexArrays(1, &quadVAO);
-            glGenBuffers(1, &quadVBO);
-            glBindVertexArray(quadVAO);
-            glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
-            glBufferData(GL_ARRAY_BUFFER, sizeof(quadVerts), quadVerts, GL_STATIC_DRAW);
-            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
-            glEnableVertexAttribArray(0);
-            glBindVertexArray(0);
-        }
+        GLuint quadVAO = renderer.GetQuadVAO();
 
         // 渲染
         if (config.wallpaperMode && !wallpaperWindows.empty()) {
@@ -1099,21 +974,11 @@ int main(int argc, char* argv[]) {
                         localMouse[3] * config.renderScale
                     };
 
-                    // 设置 Image pass 渲染到降分辨率 FBO
-                    multiPass.SetImageTargetFBO(renderFBO);
+                    multiPass.SetImageTargetFBO(blitRenderer.GetRenderFBO());
                     multiPass.RenderAllPasses(quadVAO, currentTime, timeDelta, frameCount,
                                              scaledMouse, date, curRenderW, curRenderH, clickTime);
 
-                    // Blit FBO 到屏幕
-                    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-                    glViewport(0, 0, ww.width, ww.height);
-                    glUseProgram(blitProgram);
-                    glActiveTexture(GL_TEXTURE0);
-                    glBindTexture(GL_TEXTURE_2D, renderTex);
-                    glUniform1i(glGetUniformLocation(blitProgram, "uTex"), 0);
-                    glBindVertexArray(blitVAO);
-                    glDrawArrays(GL_TRIANGLES, 0, 6);
-                    glBindVertexArray(0);
+                    blitRenderer.BlitToScreen(ww.width, ww.height);
                 } else {
                     multiPass.SetImageTargetFBO(0);
                     multiPass.RenderAllPasses(quadVAO, currentTime, timeDelta, frameCount,
@@ -1142,24 +1007,17 @@ int main(int argc, char* argv[]) {
             if (useScaledRender) {
                 int scaledW = static_cast<int>(config.width * config.renderScale);
                 int scaledH = static_cast<int>(config.height * config.renderScale);
-                if (scaledW != renderWidth || scaledH != renderHeight) {
-                    CreateRenderFBO(config.width, config.height);
-                    multiPass.Resize(renderWidth, renderHeight);
+                if (scaledW != blitRenderer.GetRenderWidth() || scaledH != blitRenderer.GetRenderHeight()) {
+                    blitRenderer.CreateRenderFBO(config.width, config.height, config.renderScale);
+                    multiPass.Resize(blitRenderer.GetRenderWidth(), blitRenderer.GetRenderHeight());
                 }
 
-                multiPass.SetImageTargetFBO(renderFBO);
+                multiPass.SetImageTargetFBO(blitRenderer.GetRenderFBO());
                 multiPass.RenderAllPasses(quadVAO, currentTime, timeDelta, frameCount,
-                                         mouse, date, renderWidth, renderHeight, clickTime);
+                                         mouse, date, blitRenderer.GetRenderWidth(),
+                                         blitRenderer.GetRenderHeight(), clickTime);
 
-                glBindFramebuffer(GL_FRAMEBUFFER, 0);
-                glViewport(0, 0, config.width, config.height);
-                glUseProgram(blitProgram);
-                glActiveTexture(GL_TEXTURE0);
-                glBindTexture(GL_TEXTURE_2D, renderTex);
-                glUniform1i(glGetUniformLocation(blitProgram, "uTex"), 0);
-                glBindVertexArray(blitVAO);
-                glDrawArrays(GL_TRIANGLES, 0, 6);
-                glBindVertexArray(0);
+                blitRenderer.BlitToScreen(config.width, config.height);
             } else {
                 multiPass.SetImageTargetFBO(0);
                 multiPass.RenderAllPasses(quadVAO, currentTime, timeDelta, frameCount,
@@ -1221,11 +1079,7 @@ int main(int argc, char* argv[]) {
     watcher.Stop();
     tray.Destroy();
     debugUI.Shutdown();
-
-    // 释放降分辨率渲染资源
-    if (renderFBO) { glDeleteFramebuffers(1, &renderFBO); glDeleteTextures(1, &renderTex); }
-    if (blitProgram) glDeleteProgram(blitProgram);
-    if (blitVAO) { glDeleteVertexArrays(1, &blitVAO); glDeleteBuffers(1, &blitVBO); }
+    blitRenderer.Cleanup();
 
     if (config.wallpaperMode) {
         Wallpaper::Restore();

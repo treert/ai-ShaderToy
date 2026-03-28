@@ -71,6 +71,7 @@ set(SOURCES
     src/wallpaper.cpp
     src/texture_manager.cpp
     src/multi_pass.cpp
+    src/blit_renderer.cpp
     src/file_watcher.cpp
     src/tray_icon.cpp
     src/debug_ui.cpp
@@ -85,6 +86,7 @@ set(HEADERS
     src/wallpaper.h
     src/texture_manager.h
     src/multi_pass.h
+    src/blit_renderer.h
     src/file_watcher.h
     src/tray_icon.h
     src/debug_ui.h

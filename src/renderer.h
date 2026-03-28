@@ -23,6 +23,9 @@ public:
     void RenderFrame(ShaderManager& shader, float time, float timeDelta,
                      int frame, const float mouse[4], const float date[4]);
 
+    /// 获取全屏四边形 VAO（供 MultiPassRenderer 等外部使用）
+    GLuint GetQuadVAO() const { return vao_; }
+
 private:
     /// 创建全屏四边形的 VAO/VBO
     void CreateFullscreenQuad();

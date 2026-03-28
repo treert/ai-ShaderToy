@@ -366,6 +366,7 @@ bool ShaderProject::LoadFromDirectory(const std::string& dirPath) {
     }
 
     // channels.json (可选，配置各 pass 的 iChannel 绑定)
+    bool channelsParsed = false;
     fs::path channelsPath = dir / "channels.json";
     if (fs::exists(channelsPath)) {
         allFiles_.push_back(channelsPath.string());
@@ -373,90 +374,91 @@ bool ShaderProject::LoadFromDirectory(const std::string& dirPath) {
         std::ifstream cf(channelsPath);
         if (cf.is_open()) {
             json channelsJson;
+            bool parseOk = true;
             try {
                 cf >> channelsJson;
             } catch (const json::parse_error& e) {
                 std::cerr << "Warning: failed to parse channels.json: " << e.what() << std::endl;
-                // 继续使用默认绑定
-                goto applyDefaults;
+                parseOk = false;
             }
 
-            // 解析每个 pass 的通道配置
-            auto parsePassChannels = [&](const std::string& passKey, PassData& pass) {
-                if (!channelsJson.contains(passKey)) return;
-                const auto& passConf = channelsJson[passKey];
+            if (parseOk) {
+                // 解析每个 pass 的通道配置
+                auto parsePassChannels = [&](const std::string& passKey, PassData& pass) {
+                    if (!channelsJson.contains(passKey)) return;
+                    const auto& passConf = channelsJson[passKey];
 
-                for (int ch = 0; ch < 4; ++ch) {
-                    std::string chKey = "iChannel" + std::to_string(ch);
-                    if (!passConf.contains(chKey)) continue;
+                    for (int ch = 0; ch < 4; ++ch) {
+                        std::string chKey = "iChannel" + std::to_string(ch);
+                        if (!passConf.contains(chKey)) continue;
 
-                    const auto& chVal = passConf[chKey];
-                    auto& binding = pass.channels[ch];
+                        const auto& chVal = passConf[chKey];
+                        auto& binding = pass.channels[ch];
 
-                    // 支持两种格式：
-                    //   字符串: "buf_a" 或 "/media/a/xxx.jpg"
-                    //   对象:   {"path": "/media/a/xxx.png", "type": "cubemap"}
-                    std::string value;
-                    std::string texType;
-                    if (chVal.is_object()) {
-                        value = chVal.value("path", "");
-                        texType = chVal.value("type", "");
-                    } else {
-                        value = chVal.get<std::string>();
+                        // 支持两种格式：
+                        //   字符串: "buf_a" 或 "/media/a/xxx.jpg"
+                        //   对象:   {"path": "/media/a/xxx.png", "type": "cubemap"}
+                        std::string value;
+                        std::string texType;
+                        if (chVal.is_object()) {
+                            value = chVal.value("path", "");
+                            texType = chVal.value("type", "");
+                        } else {
+                            value = chVal.get<std::string>();
+                        }
+
+                        // 检查是否引用 buffer
+                        if (value == "buf_a" || value == "buffer_a" || value == "Buffer A") {
+                            binding.source = ChannelBinding::Source::Buffer;
+                            binding.bufferIndex = 0;
+                        } else if (value == "buf_b" || value == "buffer_b" || value == "Buffer B") {
+                            binding.source = ChannelBinding::Source::Buffer;
+                            binding.bufferIndex = 1;
+                        } else if (value == "buf_c" || value == "buffer_c" || value == "Buffer C") {
+                            binding.source = ChannelBinding::Source::Buffer;
+                            binding.bufferIndex = 2;
+                        } else if (value == "buf_d" || value == "buffer_d" || value == "Buffer D") {
+                            binding.source = ChannelBinding::Source::Buffer;
+                            binding.bufferIndex = 3;
+                        } else if (value == "cube_a" || value == "Cube A") {
+                            binding.source = ChannelBinding::Source::CubeMapPass;
+                            binding.textureType = ChannelType::CubeMap;
+                        } else {
+                            // 视为外部纹理路径，使用统一路径解析
+                            binding.source = ChannelBinding::Source::ExternalTexture;
+                            binding.texturePath = ResolveTexturePath(value, dirPath);
+                            // 根据 type 字段判断纹理类型
+                            binding.textureType = (texType == "cubemap")
+                                ? ChannelType::CubeMap : ChannelType::Texture2D;
+                        }
                     }
+                };
 
-                    // 检查是否引用 buffer
-                    if (value == "buf_a" || value == "buffer_a" || value == "Buffer A") {
-                        binding.source = ChannelBinding::Source::Buffer;
-                        binding.bufferIndex = 0;
-                    } else if (value == "buf_b" || value == "buffer_b" || value == "Buffer B") {
-                        binding.source = ChannelBinding::Source::Buffer;
-                        binding.bufferIndex = 1;
-                    } else if (value == "buf_c" || value == "buffer_c" || value == "Buffer C") {
-                        binding.source = ChannelBinding::Source::Buffer;
-                        binding.bufferIndex = 2;
-                    } else if (value == "buf_d" || value == "buffer_d" || value == "Buffer D") {
-                        binding.source = ChannelBinding::Source::Buffer;
-                        binding.bufferIndex = 3;
-                    } else if (value == "cube_a" || value == "Cube A") {
-                        binding.source = ChannelBinding::Source::CubeMapPass;
-                        binding.textureType = ChannelType::CubeMap;
-                    } else {
-                        // 视为外部纹理路径，使用统一路径解析
-                        binding.source = ChannelBinding::Source::ExternalTexture;
-                        binding.texturePath = ResolveTexturePath(value, dirPath);
-                        // 根据 type 字段判断纹理类型
-                        binding.textureType = (texType == "cubemap")
-                            ? ChannelType::CubeMap : ChannelType::Texture2D;
+                parsePassChannels("image", data_.imagePass);
+
+                // buffer passes
+                const char* bufKeys[] = {"buf_a", "buf_b", "buf_c", "buf_d"};
+                for (auto& bp : data_.bufferPasses) {
+                    int idx = ParseBufferIndex(bp.name);
+                    if (idx >= 0 && idx < 4) {
+                        parsePassChannels(bufKeys[idx], bp);
                     }
                 }
-            };
 
-            parsePassChannels("image", data_.imagePass);
-
-            // buffer passes
-            const char* bufKeys[] = {"buf_a", "buf_b", "buf_c", "buf_d"};
-            for (auto& bp : data_.bufferPasses) {
-                int idx = ParseBufferIndex(bp.name);
-                if (idx >= 0 && idx < 4) {
-                    parsePassChannels(bufKeys[idx], bp);
+                // cube_a pass
+                if (data_.hasCubeMapPass) {
+                    parsePassChannels("cube_a", data_.cubeMapPass);
                 }
-            }
 
-            // cube_a pass
-            if (data_.hasCubeMapPass) {
-                parsePassChannels("cube_a", data_.cubeMapPass);
+                std::cout << "ShaderProject: parsed channels.json" << std::endl;
+                channelsParsed = true;
             }
-
-            std::cout << "ShaderProject: parsed channels.json" << std::endl;
-            goto done;
         }
     }
 
-applyDefaults:
-    // 默认绑定：如果有 Buffer A，Image 的 iChannel0 绑定 Buffer A
-    if (!data_.bufferPasses.empty()) {
-        // 找到 Buffer A
+    // 默认绑定（channels.json 不存在或解析失败时使用）
+    if (!channelsParsed && !data_.bufferPasses.empty()) {
+        // 找到 Buffer A，Image 的 iChannel0 绑定 Buffer A
         for (size_t i = 0; i < data_.bufferPasses.size(); ++i) {
             if (ParseBufferIndex(data_.bufferPasses[i].name) == 0) {
                 data_.imagePass.channels[0].source = ChannelBinding::Source::Buffer;
@@ -475,7 +477,6 @@ applyDefaults:
         }
     }
 
-done:
     std::cout << "ShaderProject: loaded directory '" << dirPath << "' — "
               << data_.bufferPasses.size() << " buffer pass(es)"
               << (data_.hasCubeMapPass ? " + Cube A" : "")
