@@ -272,10 +272,8 @@ int main(int argc, char* argv[]) {
         config.renderScale = config.wallpaperMode ? 0.5f : 1.0f;
     }
 
-    // VSync 策略：
-    //   - 窗口模式开启 VSync（防撕裂），配合 SDL_Delay 兜底控帧
-    //   - 壁纸模式关闭 VSync（WorkerW 嵌入窗口 VSync 行为不可靠），纯 SDL_Delay 控帧
-    SDL_GL_SetSwapInterval(config.wallpaperMode ? 0 : 1);
+    // VSync 策略：统一开启 VSync（防撕裂 + GPU 帧间休息降功耗），配合 SDL_Delay 兜底控帧
+    SDL_GL_SetSwapInterval(1);
 
     std::cout << "Target FPS: " << config.targetFPS
               << ", Render scale: " << config.renderScale << std::endl;
