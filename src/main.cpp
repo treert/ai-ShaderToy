@@ -707,10 +707,10 @@ int main(int argc, char* argv[]) {
             // 计算单个窗口与显示器的交集面积
             RECT inter;
             if (IntersectRect(&inter, &wndRect, &monRect)) {
-                long iw = inter.right - inter.left;
-                long ih = inter.bottom - inter.top;
+                long long iw = inter.right - inter.left;
+                long long ih = inter.bottom - inter.top;
                 if (iw > 0 && ih > 0) {
-                    long singleCover = iw * ih;
+                    long long singleCover = iw * ih;
                     if (singleCover >= monArea * 90 / 100) {
                         return true;
                     }
@@ -1293,6 +1293,13 @@ int main(int argc, char* argv[]) {
     tray.Destroy();
     debugUI.Shutdown();
     blitRenderer.Cleanup();
+
+    // 壁纸模式：在 GL context 销毁前释放各显示器的 BlitRenderer
+    if (config.wallpaperMode) {
+        for (auto& ww : wallpaperWindows) {
+            ww.blit.reset();
+        }
+    }
 
     if (config.wallpaperMode) {
         Wallpaper::Restore();
