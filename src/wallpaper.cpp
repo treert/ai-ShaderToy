@@ -6,47 +6,67 @@
 
 HWND Wallpaper::workerW_ = nullptr;
 
-// 回调：遍历所有顶层窗口，找到包含 SHELLDLL_DefView 的 WorkerW
 static BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM lParam) {
     HWND* pWorkerW = reinterpret_cast<HWND*>(lParam);
-
-    // 查找 SHELLDLL_DefView 子窗口
     HWND shellDllDefView = FindWindowExW(hwnd, nullptr, L"SHELLDLL_DefView", nullptr);
     if (shellDllDefView) {
-        // 找到 SHELLDLL_DefView 后，下一个 WorkerW 就是我们需要的
         *pWorkerW = FindWindowExW(nullptr, hwnd, L"WorkerW", nullptr);
     }
     return TRUE;
 }
 
 HWND Wallpaper::FindWorkerW() {
-    // 1. 找到 Progman 窗口
     HWND progman = FindWindowW(L"Progman", nullptr);
     if (!progman) {
         std::cerr << "Failed to find Progman window." << std::endl;
         return nullptr;
     }
-
-    // 2. 发送未公开消息 0x052C，使 Windows 创建 WorkerW 窗口
     LRESULT result = 0;
     SendMessageTimeoutW(progman, 0x052C, 0, 0, SMTO_NORMAL, 1000,
                         reinterpret_cast<PDWORD_PTR>(&result));
-
-    // 3. 遍历找到正确的 WorkerW
     HWND workerW = nullptr;
     EnumWindows(EnumWindowsProc, reinterpret_cast<LPARAM>(&workerW));
-
     return workerW;
 }
 
-bool Wallpaper::EmbedAsWallpaper(SDL_Window* window) {
-    workerW_ = FindWorkerW();
+HWND Wallpaper::GetWorkerW() {
+    if (!workerW_) {
+        workerW_ = FindWorkerW();
+    }
+    return workerW_;
+}
+
+// EnumDisplayMonitors 回调
+static BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC, LPRECT, LPARAM lParam) {
+    auto* monitors = reinterpret_cast<std::vector<MonitorInfo>*>(lParam);
+    MONITORINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    if (GetMonitorInfoW(hMonitor, &mi)) {
+        MonitorInfo info;
+        info.x = mi.rcMonitor.left;
+        info.y = mi.rcMonitor.top;
+        info.width = mi.rcMonitor.right - mi.rcMonitor.left;
+        info.height = mi.rcMonitor.bottom - mi.rcMonitor.top;
+        monitors->push_back(info);
+        std::cout << "Monitor: (" << info.x << "," << info.y << ") "
+                  << info.width << "x" << info.height << std::endl;
+    }
+    return TRUE;
+}
+
+std::vector<MonitorInfo> Wallpaper::EnumMonitors() {
+    std::vector<MonitorInfo> monitors;
+    EnumDisplayMonitors(nullptr, nullptr, MonitorEnumProc, reinterpret_cast<LPARAM>(&monitors));
+    return monitors;
+}
+
+bool Wallpaper::EmbedAsWallpaper(SDL_Window* window, const MonitorInfo& monitor) {
+    workerW_ = GetWorkerW();
     if (!workerW_) {
         std::cerr << "Failed to find WorkerW window." << std::endl;
         return false;
     }
 
-    // 获取 SDL 窗口的原生句柄
     SDL_SysWMinfo wmInfo;
     SDL_VERSION(&wmInfo.version);
     if (!SDL_GetWindowWMInfo(window, &wmInfo)) {
@@ -65,17 +85,18 @@ bool Wallpaper::EmbedAsWallpaper(SDL_Window* window) {
     // 设置为 WorkerW 的子窗口
     SetParent(hwnd, workerW_);
 
-    // WorkerW 内部坐标从 (0,0) 开始，覆盖整个虚拟桌面
-    int w, h;
-    GetVirtualDesktopResolution(w, h);
-    SetWindowPos(hwnd, nullptr, 0, 0, w, h, SWP_NOZORDER | SWP_SHOWWINDOW);
+    // WorkerW 的客户区坐标系与虚拟桌面一致
+    // 直接用显示器的屏幕坐标定位
+    SetWindowPos(hwnd, nullptr, monitor.x, monitor.y,
+                 monitor.width, monitor.height,
+                 SWP_NOZORDER | SWP_SHOWWINDOW);
 
-    std::cout << "Successfully embedded as wallpaper (" << w << "x" << h << ")" << std::endl;
+    std::cout << "Embedded on monitor (" << monitor.x << "," << monitor.y << ") "
+              << monitor.width << "x" << monitor.height << std::endl;
     return true;
 }
 
 void Wallpaper::Restore() {
-    // 恢复桌面 —— 重新发送 0x052C 消息刷新壁纸层
     HWND progman = FindWindowW(L"Progman", nullptr);
     if (progman) {
         SendMessageTimeoutW(progman, 0x052C, 0, 0, SMTO_NORMAL, 1000, nullptr);
@@ -99,8 +120,12 @@ void Wallpaper::GetVirtualDesktopOffset(int& x, int& y) {
 }
 
 #else
-// 非 Windows 平台的空实现
-bool Wallpaper::EmbedAsWallpaper(SDL_Window*) {
+
+std::vector<MonitorInfo> Wallpaper::EnumMonitors() {
+    return {{0, 0, 1920, 1080}};
+}
+
+bool Wallpaper::EmbedAsWallpaper(SDL_Window*, const MonitorInfo&) {
     std::cerr << "Wallpaper mode is only supported on Windows." << std::endl;
     return false;
 }
@@ -108,17 +133,15 @@ bool Wallpaper::EmbedAsWallpaper(SDL_Window*) {
 void Wallpaper::Restore() {}
 
 void Wallpaper::GetDesktopResolution(int& width, int& height) {
-    width = 1920;
-    height = 1080;
+    width = 1920; height = 1080;
 }
 
 void Wallpaper::GetVirtualDesktopResolution(int& width, int& height) {
-    width = 1920;
-    height = 1080;
+    width = 1920; height = 1080;
 }
 
 void Wallpaper::GetVirtualDesktopOffset(int& x, int& y) {
-    x = 0;
-    y = 0;
+    x = 0; y = 0;
 }
+
 #endif

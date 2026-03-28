@@ -140,68 +140,115 @@ int main(int argc, char* argv[]) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 
-    // 壁纸模式时使用虚拟桌面分辨率（覆盖所有显示器）
+    // ============================================================
+    // 创建窗口（壁纸模式为每个显示器创建独立窗口）
+    // ============================================================
+    struct WallpaperWindow {
+        SDL_Window* window = nullptr;
+        int width = 0, height = 0;
+    };
+    std::vector<WallpaperWindow> wallpaperWindows;
+    SDL_Window* window = nullptr;       // 主窗口（窗口模式用，壁纸模式指向第一个）
+    SDL_GLContext glContext = nullptr;
+
     if (config.wallpaperMode) {
-        Wallpaper::GetVirtualDesktopResolution(config.width, config.height);
+        auto monitors = Wallpaper::EnumMonitors();
+        if (monitors.empty()) {
+            std::cerr << "No monitors found." << std::endl;
+            SDL_Quit();
+            return 1;
+        }
+
+        // 允许共享 GL 上下文
+        SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
+
+        for (size_t i = 0; i < monitors.size(); ++i) {
+            const auto& mon = monitors[i];
+            Uint32 flags = SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_BORDERLESS;
+
+            SDL_Window* win = SDL_CreateWindow(
+                kWindowTitle, mon.x, mon.y, mon.width, mon.height, flags);
+            if (!win) {
+                std::cerr << "Failed to create window for monitor " << i << ": "
+                          << SDL_GetError() << std::endl;
+                continue;
+            }
+
+            // 第一个窗口创建 GL 上下文
+            if (i == 0) {
+                glContext = SDL_GL_CreateContext(win);
+                if (!glContext) {
+                    std::cerr << "SDL_GL_CreateContext failed: " << SDL_GetError() << std::endl;
+                    SDL_DestroyWindow(win);
+                    SDL_Quit();
+                    return 1;
+                }
+                if (!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress)) {
+                    std::cerr << "gladLoadGLLoader failed." << std::endl;
+                    SDL_GL_DeleteContext(glContext);
+                    SDL_DestroyWindow(win);
+                    SDL_Quit();
+                    return 1;
+                }
+            }
+
+            // 嵌入到桌面壁纸层
+            if (!Wallpaper::EmbedAsWallpaper(win, mon)) {
+                std::cerr << "Failed to embed monitor " << i << std::endl;
+                SDL_DestroyWindow(win);
+                continue;
+            }
+
+            WallpaperWindow ww;
+            ww.window = win;
+            ww.width = mon.width;
+            ww.height = mon.height;
+            wallpaperWindows.push_back(ww);
+        }
+
+        if (wallpaperWindows.empty()) {
+            std::cerr << "Failed to embed any monitor, falling back to window mode." << std::endl;
+            config.wallpaperMode = false;
+        } else {
+            window = wallpaperWindows[0].window;
+            config.width = wallpaperWindows[0].width;
+            config.height = wallpaperWindows[0].height;
+        }
     }
 
-    // 创建窗口
-    Uint32 windowFlags = SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN;
-    int winX = SDL_WINDOWPOS_CENTERED;
-    int winY = SDL_WINDOWPOS_CENTERED;
-    if (config.wallpaperMode) {
-        windowFlags |= SDL_WINDOW_BORDERLESS;
-        winX = 0;
-        winY = 0;
-    } else {
-        windowFlags |= SDL_WINDOW_RESIZABLE;
-    }
-
-    SDL_Window* window = SDL_CreateWindow(
-        kWindowTitle,
-        winX, winY,
-        config.width, config.height,
-        windowFlags
-    );
-    if (!window) {
-        std::cerr << "SDL_CreateWindow failed: " << SDL_GetError() << std::endl;
-        SDL_Quit();
-        return 1;
-    }
-
-    // 创建 OpenGL 上下文
-    SDL_GLContext glContext = SDL_GL_CreateContext(window);
-    if (!glContext) {
-        std::cerr << "SDL_GL_CreateContext failed: " << SDL_GetError() << std::endl;
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return 1;
-    }
-
-    // 初始化 GLAD
-    if (!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress)) {
-        std::cerr << "gladLoadGLLoader failed." << std::endl;
-        SDL_GL_DeleteContext(glContext);
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return 1;
+    // 窗口模式
+    if (!config.wallpaperMode) {
+        Uint32 windowFlags = SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
+        window = SDL_CreateWindow(
+            kWindowTitle,
+            SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+            config.width, config.height,
+            windowFlags
+        );
+        if (!window) {
+            std::cerr << "SDL_CreateWindow failed: " << SDL_GetError() << std::endl;
+            SDL_Quit();
+            return 1;
+        }
+        glContext = SDL_GL_CreateContext(window);
+        if (!glContext) {
+            std::cerr << "SDL_GL_CreateContext failed: " << SDL_GetError() << std::endl;
+            SDL_DestroyWindow(window);
+            SDL_Quit();
+            return 1;
+        }
+        if (!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress)) {
+            std::cerr << "gladLoadGLLoader failed." << std::endl;
+            SDL_GL_DeleteContext(glContext);
+            SDL_DestroyWindow(window);
+            SDL_Quit();
+            return 1;
+        }
     }
 
     std::cout << "OpenGL " << glGetString(GL_VERSION) << std::endl;
     std::cout << "Renderer: " << glGetString(GL_RENDERER) << std::endl;
-
-    // VSync
     SDL_GL_SetSwapInterval(1);
-
-    // ============================================================
-    // 壁纸模式：嵌入桌面
-    // ============================================================
-    if (config.wallpaperMode) {
-        if (!Wallpaper::EmbedAsWallpaper(window)) {
-            std::cerr << "Warning: Failed to embed as wallpaper, running in window mode." << std::endl;
-            config.wallpaperMode = false;
-        }
-    }
 
     // ============================================================
     // 初始化渲染器
@@ -488,10 +535,21 @@ int main(int argc, char* argv[]) {
         glUniform1f(shader.GetUniformLocation("iClickTime"), clickTime);
 
         // 渲染
-        renderer.RenderFrame(shader, currentTime, timeDelta, frameCount,
-                            mouse, date);
-
-        SDL_GL_SwapWindow(window);
+        if (config.wallpaperMode && !wallpaperWindows.empty()) {
+            // 壁纸模式：依次渲染每个显示器窗口
+            for (auto& ww : wallpaperWindows) {
+                SDL_GL_MakeCurrent(ww.window, glContext);
+                renderer.SetViewport(ww.width, ww.height);
+                renderer.RenderFrame(shader, currentTime, timeDelta, frameCount,
+                                    mouse, date);
+                SDL_GL_SwapWindow(ww.window);
+            }
+        } else {
+            // 窗口模式
+            renderer.RenderFrame(shader, currentTime, timeDelta, frameCount,
+                                mouse, date);
+            SDL_GL_SwapWindow(window);
+        }
         frameCount++;
 
         // 帧率自适应 + 帧率控制
@@ -533,7 +591,13 @@ int main(int argc, char* argv[]) {
     }
 
     SDL_GL_DeleteContext(glContext);
-    SDL_DestroyWindow(window);
+    if (config.wallpaperMode) {
+        for (auto& ww : wallpaperWindows) {
+            SDL_DestroyWindow(ww.window);
+        }
+    } else {
+        SDL_DestroyWindow(window);
+    }
     SDL_Quit();
 
     std::cout << "Goodbye!" << std::endl;
