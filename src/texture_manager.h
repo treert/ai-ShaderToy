@@ -44,6 +44,9 @@ public:
     /// 获取通道的采样器类型
     ChannelType GetChannelType(int channel) const;
 
+    /// 获取指定通道的 OpenGL 纹理 ID（0 表示未加载）
+    GLuint GetTextureID(int channel) const;
+
     /// 将指定通道绑定为 FBO 纹理（用于 Buffer pass 输出）
     void SetBufferTexture(int channel, GLuint texture, int width, int height);
 

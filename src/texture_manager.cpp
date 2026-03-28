@@ -378,6 +378,13 @@ ChannelType TextureManager::GetChannelType(int channel) const {
     return ChannelType::None;
 }
 
+GLuint TextureManager::GetTextureID(int channel) const {
+    if (channel >= 0 && channel < kMaxChannels) {
+        return channels_[channel].texture;
+    }
+    return 0;
+}
+
 void TextureManager::SetBufferTexture(int channel, GLuint texture, int width, int height) {
     if (channel < 0 || channel >= kMaxChannels) return;
     auto& ch = channels_[channel];

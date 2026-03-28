@@ -111,22 +111,18 @@ GLint ShaderManager::GetUniformLocation(const char* name) const {
 
 std::string ShaderManager::WrapShaderToySource(const std::string& source) const {
     // 将 ShaderToy 的 mainImage(out vec4, in vec2) 包装成标准 GLSL
-    std::string wrapped = R"glsl(
-#version 330 core
-
-// ShaderToy 内置 uniform 变量
-uniform vec3      iResolution;           // 视口分辨率 (pixels)
-uniform float     iTime;                 // 播放时间 (seconds)
-uniform float     iTimeDelta;            // 帧间隔时间 (seconds)
-uniform int       iFrame;               // 帧计数
-uniform float     iFrameRate;            // 每秒渲染帧数
-uniform vec4      iMouse;               // 鼠标位置: xy=当前位置, zw=点击位置
-uniform vec4      iDate;                // 年/月/日/秒
-uniform float     iSampleRate;          // 音频采样率
-uniform float     iChannelTime[4];      // 各通道播放时间 (seconds)
-uniform vec3      iChannelResolution[4]; // 各通道分辨率
-
-)glsl";
+    std::string wrapped = "#version 330 core\n\n"
+        "// ShaderToy 内置 uniform 变量\n"
+        "uniform vec3      iResolution;           // 视口分辨率 (pixels)\n"
+        "uniform float     iTime;                 // 播放时间 (seconds)\n"
+        "uniform float     iTimeDelta;            // 帧间隔时间 (seconds)\n"
+        "uniform int       iFrame;               // 帧计数\n"
+        "uniform float     iFrameRate;            // 每秒渲染帧数\n"
+        "uniform vec4      iMouse;               // 鼠标位置: xy=当前位置, zw=点击位置\n"
+        "uniform vec4      iDate;                // 年/月/日/秒\n"
+        "uniform float     iSampleRate;          // 音频采样率\n"
+        "uniform float     iChannelTime[4];      // 各通道播放时间 (seconds)\n"
+        "uniform vec3      iChannelResolution[4]; // 各通道分辨率\n\n";
 
     // 根据通道类型动态生成 iChannel 采样器声明
     const char* samplerTypeNames[] = {"sampler2D", "sampler2D", "samplerCube", "sampler3D"};
@@ -209,9 +205,11 @@ GLuint ShaderManager::CompileShader(GLenum type, const std::string& source) {
     GLint success;
     glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
     if (!success) {
-        char infoLog[1024];
-        glGetShaderInfoLog(shader, sizeof(infoLog), nullptr, infoLog);
-        lastError_ = std::string("Shader compilation error:\n") + infoLog;
+        GLint logLen = 0;
+        glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &logLen);
+        std::string infoLog(logLen > 0 ? logLen : 1, '\0');
+        glGetShaderInfoLog(shader, static_cast<GLsizei>(infoLog.size()), nullptr, &infoLog[0]);
+        lastError_ = "Shader compilation error:\n" + infoLog;
         std::cerr << lastError_ << std::endl;
         glDeleteShader(shader);
         return 0;
@@ -228,9 +226,11 @@ bool ShaderManager::LinkProgram(GLuint vertShader, GLuint fragShader) {
     GLint success;
     glGetProgramiv(program_, GL_LINK_STATUS, &success);
     if (!success) {
-        char infoLog[1024];
-        glGetProgramInfoLog(program_, sizeof(infoLog), nullptr, infoLog);
-        lastError_ = std::string("Shader link error:\n") + infoLog;
+        GLint logLen = 0;
+        glGetProgramiv(program_, GL_INFO_LOG_LENGTH, &logLen);
+        std::string infoLog(logLen > 0 ? logLen : 1, '\0');
+        glGetProgramInfoLog(program_, static_cast<GLsizei>(infoLog.size()), nullptr, &infoLog[0]);
+        lastError_ = "Shader link error:\n" + infoLog;
         std::cerr << lastError_ << std::endl;
         glDeleteProgram(program_);
         program_ = 0;

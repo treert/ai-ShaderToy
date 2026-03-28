@@ -172,6 +172,22 @@ bool MultiPassRenderer::CreateCubeMapFBO(RenderPass& pass, int cubeSize) {
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
             std::cerr << "CubeMap FBO not complete for face " << face << std::endl;
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            // 清理已创建的 FBO
+            for (int j = 0; j <= face; ++j) {
+                if (pass.cubeFBO[j]) {
+                    glDeleteFramebuffers(1, &pass.cubeFBO[j]);
+                    pass.cubeFBO[j] = 0;
+                }
+            }
+            // 清理纹理
+            if (pass.cubeMapTexture) {
+                glDeleteTextures(1, &pass.cubeMapTexture);
+                pass.cubeMapTexture = 0;
+            }
+            if (pass.cubeMapTexturePrev) {
+                glDeleteTextures(1, &pass.cubeMapTexturePrev);
+                pass.cubeMapTexturePrev = 0;
+            }
             return false;
         }
 

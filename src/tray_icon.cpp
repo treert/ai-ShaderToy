@@ -104,7 +104,7 @@ bool TrayIcon::Create(SDL_Window* window, const MenuCallbacks& callbacks) {
     return true;
 }
 
-bool TrayIcon::HandleEvent(const SDL_Event& event) {
+bool TrayIcon::HandleEvent(const SDL_Event& /*event*/) {
     if (!created_ || !hwnd_) return false;
 
     // 处理托盘窗口消息

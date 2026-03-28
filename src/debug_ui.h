@@ -15,8 +15,8 @@ struct DebugUIState {
     int   frameCount    = 0;
     float resolution[2] = {0.0f, 0.0f};
     float mouse[4]      = {0.0f, 0.0f, 0.0f, 0.0f};
-    const char* shaderPath  = "";
-    const char* shaderError = "";
+    std::string shaderPath;
+    std::string shaderError;
     bool isMultiPass   = false;                 // 是否多 Pass 模式
     std::vector<std::string> passNames;         // 各 pass 名称列表（用于展示）
 

@@ -106,9 +106,9 @@ void DebugUI::Render(DebugUIState& state) {
             ImGui::Text("Frame Time: %.3f ms", smoothFrameTime_);
             ImGui::Text("RenderTime: %.3f ms", smoothRenderTime_);
             ImGui::Separator();
-            ImGui::Text("Shader: %s", state.shaderPath);
+            ImGui::Text("Shader: %s", state.shaderPath.c_str());
             ImGui::Text("Status: %s",
-                        (state.shaderError && state.shaderError[0] != '\0') ? "ERROR" : "OK");
+                        (!state.shaderError.empty()) ? "ERROR" : "OK");
             ImGui::Text("Mode:   %s", state.isMultiPass ? "Multi-Pass" : "Single-Pass");
             if (state.isMultiPass && !state.passNames.empty()) {
                 ImGui::Text("Passes: ");
@@ -176,7 +176,7 @@ void DebugUI::Render(DebugUIState& state) {
                 if (ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen | extraFlags)) {
                     for (size_t i = 0; i < files.size(); ++i) {
                         const auto& file = files[i];
-                        bool isCurrent = (state.shaderPath && file == state.shaderPath);
+                        bool isCurrent = (!state.shaderPath.empty() && file == state.shaderPath);
 
                         if (isCurrent) {
                             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 1.0f, 0.4f, 1.0f));
@@ -215,10 +215,10 @@ void DebugUI::Render(DebugUIState& state) {
         // ============================================================
         // 错误区
         // ============================================================
-        if (state.shaderError && state.shaderError[0] != '\0') {
+        if (!state.shaderError.empty()) {
             ImGui::Separator();
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
-            ImGui::TextWrapped("Shader Error:\n%s", state.shaderError);
+            ImGui::TextWrapped("Shader Error:\n%s", state.shaderError.c_str());
             ImGui::PopStyleColor();
         }
 
@@ -249,9 +249,9 @@ void DebugUI::RenderOverlay(const DebugUIState& state) {
     ImGui::Text("Frame Time: %.3f ms", smoothFrameTime_);
     ImGui::Text("RenderTime: %.3f ms", smoothRenderTime_);
     ImGui::Separator();
-    ImGui::Text("Shader: %s", state.shaderPath);
+    ImGui::Text("Shader: %s", state.shaderPath.c_str());
     ImGui::Text("Status: %s",
-                (state.shaderError && state.shaderError[0] != '\0') ? "ERROR" : "OK");
+                (!state.shaderError.empty()) ? "ERROR" : "OK");
     ImGui::Text("Mode:   %s", state.isMultiPass ? "Multi-Pass" : "Single-Pass");
     ImGui::Separator();
     ImGui::Text("iResolution: %.0f x %.0f", state.resolution[0], state.resolution[1]);
@@ -261,10 +261,10 @@ void DebugUI::RenderOverlay(const DebugUIState& state) {
                 state.mouse[0], state.mouse[1], state.mouse[2], state.mouse[3]);
 
     // 错误信息
-    if (state.shaderError && state.shaderError[0] != '\0') {
+    if (!state.shaderError.empty()) {
         ImGui::Separator();
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
-        ImGui::TextWrapped("Shader Error:\n%s", state.shaderError);
+        ImGui::TextWrapped("Shader Error:\n%s", state.shaderError.c_str());
         ImGui::PopStyleColor();
     }
 

@@ -435,15 +435,7 @@ int main(int argc, char* argv[]) {
             if (textures.HasTexture(i)) {
                 float tw, th;
                 textures.GetResolution(i, tw, th);
-                // 需要获取纹理 ID —— TextureManager 绑定时使用 glActiveTexture + glBindTexture
-                // 这里我们通过 Bind 获取当前绑定的纹理
-                textures.Bind(i);
-                GLint texId = 0;
-                GLenum target = (textures.GetChannelType(i) == ChannelType::CubeMap) ?
-                                GL_TEXTURE_CUBE_MAP : GL_TEXTURE_2D;
-                glGetIntegerv((target == GL_TEXTURE_CUBE_MAP) ?
-                              GL_TEXTURE_BINDING_CUBE_MAP : GL_TEXTURE_BINDING_2D, &texId);
-                multiPass.SetExternalTexture(i, static_cast<GLuint>(texId),
+                multiPass.SetExternalTexture(i, textures.GetTextureID(i),
                                              static_cast<int>(tw), static_cast<int>(th),
                                              textures.GetChannelType(i));
             }
@@ -745,8 +737,8 @@ int main(int argc, char* argv[]) {
         debugState.resolution[0] = resW;
         debugState.resolution[1] = resH;
         std::copy(m, m + 4, std::begin(debugState.mouse));
-        debugState.shaderPath  = config.shaderPath.c_str();
-        debugState.shaderError = lastShaderError.c_str();
+        debugState.shaderPath  = config.shaderPath;
+        debugState.shaderError = lastShaderError;
         debugState.paused      = paused.load();
         debugState.isMultiPass = multiPass.IsMultiPass();
         debugState.passNames   = multiPass.GetPassNames();
