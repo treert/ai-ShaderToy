@@ -1062,6 +1062,7 @@ int main(int argc, char* argv[]) {
 
             multiPass.RenderBufferPasses(quadVAO, currentTime, timeDelta, frameCount,
                                          bufferMouse, date, bufferW, bufferH, clickTime);
+            glFinish();
 
             Uint64 bufferEnd = SDL_GetPerformanceCounter();
             float bufferTime = static_cast<float>(bufferEnd - renderStart) / static_cast<float>(freq);
@@ -1122,6 +1123,7 @@ int main(int argc, char* argv[]) {
                                              localMouse, date, ww.width, ww.height, clickTime);
                 }
 
+                glFinish();
                 Uint64 imageEnd = SDL_GetPerformanceCounter();
                 float imageTime = static_cast<float>(imageEnd - imageStart) / static_cast<float>(freq);
 
@@ -1165,6 +1167,7 @@ int main(int argc, char* argv[]) {
 
             // DebugUI 渲染（在 shader 渲染后、SwapWindow 前）
             {
+                glFinish();
                 Uint64 renderEnd = SDL_GetPerformanceCounter();
                 float renderElapsed = static_cast<float>(renderEnd - renderStart) / static_cast<float>(freq);
 
