@@ -558,31 +558,7 @@ int main(int argc, char* argv[]) {
     }
 
     // ============================================================
-    // 系统托盘（壁纸模式下启用）
-    // ============================================================
-    std::atomic<bool> paused{false};
-    bool running = true;
-    TrayIcon tray;
-    if (config.wallpaperMode) {
-        TrayIcon::MenuCallbacks cb;
-        cb.onPause  = [&]() { paused = true;  std::cout << "Paused." << std::endl; };
-        cb.onResume = [&]() { paused = false; std::cout << "Resumed." << std::endl; };
-        cb.onReload = [&]() { shaderNeedsReload = true; std::cout << "Reload requested." << std::endl; };
-        cb.onQuit   = [&]() { running = false; };
-        tray.Create(window, cb);
-    }
-
-    // ============================================================
-    // 打印运行模式
-    // ============================================================
-    if (config.wallpaperMode) {
-        std::cout << "Running in wallpaper mode." << std::endl;
-    } else {
-        std::cout << "Running in window mode. Press ESC to exit, F5 to reload shader, Tab to toggle debug panel." << std::endl;
-    }
-
-    // ============================================================
-    // 调试 UI（窗口模式始终初始化，壁纸模式仅 --debug 时初始化）
+    // 调试 UI 和 Shader 文件扫描（需要在托盘初始化之前声明）
     // ============================================================
     DebugUI debugUI;
     DebugUIState debugState;
@@ -606,7 +582,6 @@ int main(int argc, char* argv[]) {
                         debugState.jsonFiles.push_back(path);
                     }
                 } else if (entry.is_directory()) {
-                    // 目录模式：检查是否包含 image.glsl
                     auto imagePath = entry.path() / "image.glsl";
                     if (std::filesystem::exists(imagePath, ec)) {
                         std::string path = entry.path().generic_string();
@@ -620,6 +595,64 @@ int main(int argc, char* argv[]) {
         }
     };
 
+    // FileWatcher 重建辅助函数（shader 切换时复用）
+    auto RebuildFileWatcher = [&]() {
+        if (!config.hotReload) return;
+        watcher.Stop();
+        ShaderProject newProject;
+        if (newProject.Load(config.shaderPath)) {
+            project = std::move(newProject);
+            auto files = project.GetAllFiles();
+            if (!files.empty()) {
+                watcher.Watch(files[0], [&](const std::string&) {
+                    shaderNeedsReload.store(true);
+                });
+                for (size_t fi = 1; fi < files.size(); ++fi) {
+                    watcher.AddFile(files[fi]);
+                }
+            }
+        }
+    };
+
+    // ============================================================
+    // 系统托盘（壁纸模式下启用）
+    // ============================================================
+    std::atomic<bool> paused{false};
+    bool running = true;
+    std::string trayShaderSwitchRequest;  // 托盘菜单 shader 切换请求
+    Uint32 trayTooltipTimer = 0;          // tooltip 更新计时
+    float lastRenderElapsed = 0.0f;       // 最近一帧渲染耗时（秒），用于 tooltip
+    TrayIcon tray;
+    if (config.wallpaperMode) {
+        TrayIcon::MenuCallbacks cb;
+        cb.onPause  = [&]() { paused = true;  std::cout << "Paused." << std::endl; };
+        cb.onResume = [&]() { paused = false; std::cout << "Resumed." << std::endl; };
+        cb.onReload = [&]() { shaderNeedsReload = true; std::cout << "Reload requested." << std::endl; };
+        cb.onQuit   = [&]() { running = false; };
+        cb.onSwitchShader = [&](const std::string& path) {
+            trayShaderSwitchRequest = path;
+            std::cout << "Tray: switch shader to " << path << std::endl;
+        };
+        tray.Create(window, cb);
+
+        // 扫描 shader 文件列表并传给 tray（复用 ScanShaderFiles 扫描到 debugState，再传给 tray）
+        ScanShaderFiles();
+        tray.SetShaderList(debugState.glslFiles, debugState.jsonFiles,
+                           debugState.dirFiles, config.shaderPath);
+    }
+
+    // ============================================================
+    // 打印运行模式
+    // ============================================================
+    if (config.wallpaperMode) {
+        std::cout << "Running in wallpaper mode." << std::endl;
+    } else {
+        std::cout << "Running in window mode. Press ESC to exit, F5 to reload shader, Tab to toggle debug panel." << std::endl;
+    }
+
+    // ============================================================
+    // 调试 UI 初始化（窗口模式始终初始化，壁纸模式仅 --debug 时初始化）
+    // ============================================================
     if (!config.wallpaperMode) {
         if (!debugUI.Init(window, glContext)) {
             std::cerr << "DebugUI init failed, continuing without debug panel." << std::endl;
@@ -887,24 +920,7 @@ int main(int argc, char* argv[]) {
                 config.shaderPath = debugState.requestSwitchShader;
                 debugState.requestSwitchShader.clear();
                 shaderNeedsReload = true;
-                // 更新 FileWatcher
-                if (config.hotReload) {
-                    watcher.Stop();
-                    // 重新加载项目并设置监控
-                    ShaderProject newProject;
-                    if (newProject.Load(config.shaderPath)) {
-                        project = std::move(newProject);
-                        auto files = project.GetAllFiles();
-                        if (!files.empty()) {
-                            watcher.Watch(files[0], [&](const std::string&) {
-                                shaderNeedsReload.store(true);
-                            });
-                            for (size_t fi = 1; fi < files.size(); ++fi) {
-                                watcher.AddFile(files[fi]);
-                            }
-                        }
-                    }
-                }
+                RebuildFileWatcher();
             }
             // 重载请求
             if (debugState.requestReload) {
@@ -977,6 +993,14 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        // 壁纸模式：处理托盘菜单 shader 切换请求
+        if (config.wallpaperMode && !trayShaderSwitchRequest.empty()) {
+            config.shaderPath = trayShaderSwitchRequest;
+            trayShaderSwitchRequest.clear();
+            shaderNeedsReload = true;
+            RebuildFileWatcher();
+        }
+
         // 热加载：重新加载整个 shader 项目并重建渲染器
         if (shaderNeedsReload.exchange(false)) {
             ShaderProject newProject;
@@ -987,6 +1011,11 @@ int main(int argc, char* argv[]) {
                 if (SetupMultiPass(project.GetData())) {
                     lastShaderError.clear();
                     std::cout << "Shader reloaded successfully." << std::endl;
+                    // 更新 tray 当前 shader 标记
+                    if (config.wallpaperMode) {
+                        tray.SetShaderList(debugState.glslFiles, debugState.jsonFiles,
+                                           debugState.dirFiles, config.shaderPath);
+                    }
                 } else {
                     lastShaderError = multiPass.GetLastError();
                     std::cerr << "Shader reload failed: " << lastShaderError << std::endl;
@@ -1019,6 +1048,18 @@ int main(int argc, char* argv[]) {
                         debugUI.RenderOverlay(debugState);
                         SDL_GL_SwapWindow(ww.window);
                     }
+                }
+                // 暂停时也更新 tooltip（显示 Paused 状态）
+                Uint32 tooltipNow = SDL_GetTicks();
+                if (tooltipNow - trayTooltipTimer > 1000) {
+                    trayTooltipTimer = tooltipNow;
+                    std::string shaderDisplayName = config.shaderPath;
+                    auto slashPos = shaderDisplayName.find_last_of("/\\");
+                    if (slashPos != std::string::npos) {
+                        shaderDisplayName = shaderDisplayName.substr(slashPos + 1);
+                    }
+                    tray.UpdateTooltip(0.0f, 0.0f, shaderDisplayName + " [Paused]",
+                                       config.monitorIndex);
                 }
                 SDL_Delay(100);
             }
@@ -1200,6 +1241,7 @@ int main(int argc, char* argv[]) {
 
                 // renderTime = Buffer pass 共享时间 + 当前显示器 Image pass 时间
                 float renderElapsed = bufferTime + imageTime;
+                lastRenderElapsed = renderElapsed;
 
                 if (config.showDebug) {
                     fillDebugState(measuredFPS, currentTime, timeDelta, renderElapsed,
@@ -1211,6 +1253,20 @@ int main(int argc, char* argv[]) {
                 }
 
                 SDL_GL_SwapWindow(ww.window);
+            }
+
+            // 每秒更新一次托盘 tooltip
+            Uint32 tooltipNow = SDL_GetTicks();
+            if (tooltipNow - trayTooltipTimer > 1000) {
+                trayTooltipTimer = tooltipNow;
+                // 从 shaderPath 提取显示名
+                std::string shaderDisplayName = config.shaderPath;
+                auto slashPos = shaderDisplayName.find_last_of("/\\");
+                if (slashPos != std::string::npos) {
+                    shaderDisplayName = shaderDisplayName.substr(slashPos + 1);
+                }
+                tray.UpdateTooltip(measuredFPS, lastRenderElapsed * 1000.0f,
+                                   shaderDisplayName, config.monitorIndex);
             }
         } else {
             // 窗口模式

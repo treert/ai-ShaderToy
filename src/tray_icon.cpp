@@ -5,6 +5,9 @@
 
 #ifdef _WIN32
 
+#include <cwchar>
+#include <algorithm>
+
 TrayIcon* TrayIcon::instance_ = nullptr;
 
 TrayIcon::TrayIcon() {
@@ -26,8 +29,9 @@ LRESULT CALLBACK TrayIcon::TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         }
         return 0;
 
-    case WM_COMMAND:
-        switch (LOWORD(wParam)) {
+    case WM_COMMAND: {
+        UINT cmdId = LOWORD(wParam);
+        switch (cmdId) {
         case ID_TRAY_PAUSE:
             if (instance_->callbacks_.onPause) instance_->callbacks_.onPause();
             break;
@@ -40,8 +44,17 @@ LRESULT CALLBACK TrayIcon::TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         case ID_TRAY_QUIT:
             if (instance_->callbacks_.onQuit) instance_->callbacks_.onQuit();
             break;
+        default:
+            if (cmdId >= ID_TRAY_SHADER_BASE && cmdId < ID_TRAY_SHADER_MAX) {
+                size_t idx = cmdId - ID_TRAY_SHADER_BASE;
+                if (idx < instance_->shaderPaths_.size() && instance_->callbacks_.onSwitchShader) {
+                    instance_->callbacks_.onSwitchShader(instance_->shaderPaths_[idx]);
+                }
+            }
+            break;
         }
         return 0;
+    }
     }
 
     return DefWindowProcW(hwnd, msg, wParam, lParam);
@@ -50,7 +63,6 @@ LRESULT CALLBACK TrayIcon::TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
 bool TrayIcon::Create(SDL_Window* window, const MenuCallbacks& callbacks) {
     callbacks_ = callbacks;
 
-    // 创建隐藏窗口用于接收托盘消息
     WNDCLASSEXW wc = {};
     wc.cbSize = sizeof(wc);
     wc.lpfnWndProc = TrayWndProc;
@@ -66,16 +78,14 @@ bool TrayIcon::Create(SDL_Window* window, const MenuCallbacks& callbacks) {
         return false;
     }
 
-    // 从 exe 内嵌资源加载图标，失败则用系统默认
     HICON hIcon = (HICON)LoadImageW(GetModuleHandle(nullptr),
                                     MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON,
                                     GetSystemMetrics(SM_CXSMICON),
                                     GetSystemMetrics(SM_CYSMICON), 0);
     if (!hIcon) {
-        hIcon = LoadIconW(nullptr, MAKEINTRESOURCEW(32512)); // IDI_APPLICATION
+        hIcon = LoadIconW(nullptr, MAKEINTRESOURCEW(32512));
     }
 
-    // 创建托盘图标
     ZeroMemory(&nid_, sizeof(nid_));
     nid_.cbSize = sizeof(nid_);
     nid_.hWnd = hwnd_;
@@ -90,14 +100,7 @@ bool TrayIcon::Create(SDL_Window* window, const MenuCallbacks& callbacks) {
         return false;
     }
 
-    // 创建右键菜单
-    menu_ = CreatePopupMenu();
-    AppendMenuW(menu_, MF_STRING, ID_TRAY_PAUSE,  L"Pause");
-    AppendMenuW(menu_, MF_STRING, ID_TRAY_RESUME, L"Resume");
-    AppendMenuW(menu_, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu_, MF_STRING, ID_TRAY_RELOAD, L"Reload Shader");
-    AppendMenuW(menu_, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu_, MF_STRING, ID_TRAY_QUIT,   L"Quit");
+    RebuildMenu();
 
     created_ = true;
     std::cout << "Tray icon created." << std::endl;
@@ -107,7 +110,6 @@ bool TrayIcon::Create(SDL_Window* window, const MenuCallbacks& callbacks) {
 bool TrayIcon::HandleEvent(const SDL_Event& /*event*/) {
     if (!created_ || !hwnd_) return false;
 
-    // 处理托盘窗口消息
     MSG msg;
     while (PeekMessage(&msg, hwnd_, 0, 0, PM_REMOVE)) {
         TranslateMessage(&msg);
@@ -117,6 +119,8 @@ bool TrayIcon::HandleEvent(const SDL_Event& /*event*/) {
 }
 
 void TrayIcon::ShowContextMenu() {
+    RebuildMenu();
+
     POINT pt;
     GetCursorPos(&pt);
     SetForegroundWindow(hwnd_);
@@ -125,12 +129,121 @@ void TrayIcon::ShowContextMenu() {
     PostMessage(hwnd_, WM_NULL, 0, 0);
 }
 
+void TrayIcon::RebuildMenu() {
+    if (menu_) {
+        DestroyMenu(menu_);
+        menu_ = nullptr;
+        shaderSubMenu_ = nullptr;
+    }
+
+    menu_ = CreatePopupMenu();
+    AppendMenuW(menu_, MF_STRING, ID_TRAY_PAUSE,  L"Pause");
+    AppendMenuW(menu_, MF_STRING, ID_TRAY_RESUME, L"Resume");
+    AppendMenuW(menu_, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu_, MF_STRING, ID_TRAY_RELOAD, L"Reload Shader");
+
+    // Shader 切换子菜单
+    if (!shaderPaths_.empty()) {
+        shaderSubMenu_ = CreatePopupMenu();
+
+        UINT menuId = ID_TRAY_SHADER_BASE;
+
+        auto addItems = [&](const std::vector<std::string>& files) {
+            for (const auto& file : files) {
+                if (menuId >= ID_TRAY_SHADER_MAX) break;
+
+                // 从路径中提取显示名
+                std::string displayName = file;
+                auto slashPos = file.find_last_of("/\\");
+                if (slashPos != std::string::npos) {
+                    displayName = file.substr(slashPos + 1);
+                }
+
+                // 转宽字符
+                int wlen = MultiByteToWideChar(CP_UTF8, 0, displayName.c_str(), -1, nullptr, 0);
+                std::wstring wname(wlen, L'\0');
+                MultiByteToWideChar(CP_UTF8, 0, displayName.c_str(), -1, &wname[0], wlen);
+
+                UINT flags = MF_STRING;
+                if (file == currentShader_) {
+                    flags |= MF_CHECKED;
+                }
+                AppendMenuW(shaderSubMenu_, flags, menuId, wname.c_str());
+                menuId++;
+            }
+        };
+
+        if (!glslFiles_.empty()) {
+            addItems(glslFiles_);
+        }
+        if (!jsonFiles_.empty()) {
+            if (menuId > ID_TRAY_SHADER_BASE) {
+                AppendMenuW(shaderSubMenu_, MF_SEPARATOR, 0, nullptr);
+            }
+            addItems(jsonFiles_);
+        }
+        if (!dirFiles_.empty()) {
+            if (menuId > ID_TRAY_SHADER_BASE) {
+                AppendMenuW(shaderSubMenu_, MF_SEPARATOR, 0, nullptr);
+            }
+            addItems(dirFiles_);
+        }
+
+        AppendMenuW(menu_, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(shaderSubMenu_), L"Switch Shader");
+    }
+
+    AppendMenuW(menu_, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu_, MF_STRING, ID_TRAY_QUIT, L"Quit");
+}
+
+void TrayIcon::UpdateTooltip(float fps, float renderTimeMs,
+                              const std::string& shaderName, int monitorIndex) {
+    if (!created_) return;
+
+    wchar_t tip[128];
+    // 格式: ShaderToy Desktop [Mon:0]\nFPS: 30.0 | RT: 2.1ms\nshader_name
+    std::string monStr = (monitorIndex < 0) ? "All" : std::to_string(monitorIndex);
+    // 截断 shaderName 避免超出 szTip 128 字符限制
+    std::string truncName = shaderName;
+    if (truncName.size() > 60) {
+        truncName = truncName.substr(0, 57) + "...";
+    }
+    int written = swprintf_s(tip, 128,
+        L"ShaderToy Desktop [Mon:%hs]\nFPS: %.1f | RT: %.1fms\n%hs",
+        monStr.c_str(), fps, renderTimeMs, truncName.c_str());
+    if (written < 0) {
+        wcscpy_s(tip, L"ShaderToy Desktop");
+    }
+
+    wcscpy_s(nid_.szTip, tip);
+    nid_.uFlags = NIF_TIP;
+    Shell_NotifyIconW(NIM_MODIFY, &nid_);
+}
+
+void TrayIcon::SetShaderList(const std::vector<std::string>& glslFiles,
+                              const std::vector<std::string>& jsonFiles,
+                              const std::vector<std::string>& dirFiles,
+                              const std::string& currentShader) {
+    glslFiles_ = glslFiles;
+    jsonFiles_ = jsonFiles;
+    dirFiles_ = dirFiles;
+    currentShader_ = currentShader;
+
+    // 重建 shaderPaths_ 映射表（顺序需与菜单构建一致）
+    shaderPaths_.clear();
+    shaderPaths_.insert(shaderPaths_.end(), glslFiles_.begin(), glslFiles_.end());
+    shaderPaths_.insert(shaderPaths_.end(), jsonFiles_.begin(), jsonFiles_.end());
+    shaderPaths_.insert(shaderPaths_.end(), dirFiles_.begin(), dirFiles_.end());
+}
+
 void TrayIcon::Destroy() {
     if (created_) {
         Shell_NotifyIconW(NIM_DELETE, &nid_);
         if (menu_) {
             DestroyMenu(menu_);
             menu_ = nullptr;
+            shaderSubMenu_ = nullptr;
         }
         if (hwnd_) {
             DestroyWindow(hwnd_);
@@ -150,5 +263,10 @@ bool TrayIcon::Create(SDL_Window*, const MenuCallbacks&) {
 }
 bool TrayIcon::HandleEvent(const SDL_Event&) { return false; }
 void TrayIcon::Destroy() {}
+void TrayIcon::UpdateTooltip(float, float, const std::string&, int) {}
+void TrayIcon::SetShaderList(const std::vector<std::string>&,
+                              const std::vector<std::string>&,
+                              const std::vector<std::string>&,
+                              const std::string&) {}
 
 #endif
