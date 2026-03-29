@@ -23,9 +23,6 @@ public:
         std::function<void()> onToggleDebug;
     };
 
-    /// 设置调试信息显示状态（影响菜单勾选标记）
-    void SetDebugState(bool showDebug);
-
     TrayIcon();
     ~TrayIcon();
 
@@ -52,6 +49,9 @@ public:
                        const std::vector<std::string>& jsonFiles,
                        const std::vector<std::string>& dirFiles,
                        const std::string& currentShader);
+
+    /// 设置调试信息显示状态（影响菜单勾选标记）
+    void SetDebugState(bool showDebug);
 
 private:
 #ifdef _WIN32
