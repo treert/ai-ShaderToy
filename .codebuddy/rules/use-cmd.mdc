@@ -7,3 +7,4 @@ alwaysApply: true
 - 执行终端命令时，使用 cmd 而非 PowerShell，即通过 `cmd /c "命令"` 的方式调用。
 - 修改代码后，自动执行编译验证，不需要等待用户指令。
 - 不要使用临时文件+del 的方式捕获命令输出，直接用 `2>&1` 管道即可。
+- 编译使用 Ninja 生成器 + MSVC 编译器（因为 VS 生成器不支持生成 `compile_commands.json`，而 clangd 插件依赖它来正确解析 include 路径和编译选项）。编译前需要先初始化 vcvars64 环境：`call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1 && cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && cmake --build build`。不要使用默认的 Visual Studio 生成器。
