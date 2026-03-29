@@ -12,8 +12,7 @@
 - `assets/` — 资源文件（着色器等）
 - `third_party/` — 第三方依赖（git submodule：SDL2、GLAD、ImGui、nlohmann/json）
 - `Docs/` — 项目知识库（技术文档，供 AI 读写，也供用户查阅）
-- `tests/` — 测试
-- `scripts/` — 脚本
+- `tools/` — 辅助工具（json2dir.py 等）
 
 ## 开发阶段
 

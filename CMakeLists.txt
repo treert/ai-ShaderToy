@@ -3,6 +3,7 @@ project(ShaderToyDesktop VERSION 0.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # ============================================================
 # 依赖：优先使用本地 third_party/ submodule，不存在则回退 FetchContent
