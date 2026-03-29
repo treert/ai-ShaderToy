@@ -620,6 +620,7 @@ int main(int argc, char* argv[]) {
     std::atomic<bool> paused{false};
     bool running = true;
     std::string trayShaderSwitchRequest;  // 托盘菜单 shader 切换请求
+    bool trayDebugToggleRequest = false;  // 托盘菜单 debug 切换请求
     Uint32 trayTooltipTimer = 0;          // tooltip 更新计时
     float lastRenderElapsed = 0.0f;       // 最近一帧渲染耗时（秒），用于 tooltip
     TrayIcon tray;
@@ -633,7 +634,9 @@ int main(int argc, char* argv[]) {
             trayShaderSwitchRequest = path;
             std::cout << "Tray: switch shader to " << path << std::endl;
         };
+        cb.onToggleDebug = [&]() { trayDebugToggleRequest = true; };
         tray.Create(window, cb);
+        tray.SetDebugState(config.showDebug);
 
         // 扫描 shader 文件列表并传给 tray（复用 ScanShaderFiles 扫描到 debugState，再传给 tray）
         ScanShaderFiles();
@@ -999,6 +1002,21 @@ int main(int argc, char* argv[]) {
             trayShaderSwitchRequest.clear();
             shaderNeedsReload = true;
             RebuildFileWatcher();
+        }
+
+        // 壁纸模式：处理托盘菜单 debug overlay 切换
+        if (config.wallpaperMode && trayDebugToggleRequest) {
+            trayDebugToggleRequest = false;
+            config.showDebug = !config.showDebug;
+            // 首次开启时延迟初始化 ImGui
+            if (config.showDebug && !debugUI.IsInitialized()) {
+                if (!debugUI.Init(wallpaperWindows[0].window, glContext)) {
+                    std::cerr << "DebugUI init failed, disabling debug overlay." << std::endl;
+                    config.showDebug = false;
+                }
+            }
+            tray.SetDebugState(config.showDebug);
+            std::cout << "Debug overlay: " << (config.showDebug ? "ON" : "OFF") << std::endl;
         }
 
         // 热加载：重新加载整个 shader 项目并重建渲染器

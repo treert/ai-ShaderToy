@@ -33,6 +33,7 @@
 - [x] 系统托盘图标和控制界面（暂停/恢复/重载/退出）
 - [x] 托盘 Tooltip 动态状态（FPS/RenderTime/shader名称/monitor参数，每秒刷新）
 - [x] 托盘菜单 Shader 切换（Switch Shader 子菜单，列出所有 GLSL/JSON/目录 shader，当前 shader 勾选标记）
+- [x] 托盘菜单 Debug Overlay 切换（运行时开关调试信息叠加显示，支持延迟初始化 ImGui）
 - [x] iSampleRate 音频采样率接入（固定 44100）
 - [x] 多显示器支持（虚拟桌面 SM_CXVIRTUALSCREEN）
 - [x] 壁纸模式指定显示器（--monitor 参数，支持只在某个显示器上生效）

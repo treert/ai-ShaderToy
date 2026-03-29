@@ -20,7 +20,11 @@ public:
         std::function<void()> onReload;
         std::function<void()> onQuit;
         std::function<void(const std::string&)> onSwitchShader;
+        std::function<void()> onToggleDebug;
     };
+
+    /// 设置调试信息显示状态（影响菜单勾选标记）
+    void SetDebugState(bool showDebug);
 
     TrayIcon();
     ~TrayIcon();
@@ -68,6 +72,7 @@ private:
     std::vector<std::string> glslFiles_;
     std::vector<std::string> jsonFiles_;
     std::vector<std::string> dirFiles_;
+    bool showDebug_ = false;
 
     static TrayIcon* instance_;
     static constexpr UINT WM_TRAYICON = WM_USER + 1;
@@ -75,6 +80,7 @@ private:
     static constexpr UINT ID_TRAY_RESUME = 1002;
     static constexpr UINT ID_TRAY_RELOAD = 1003;
     static constexpr UINT ID_TRAY_QUIT   = 1004;
+    static constexpr UINT ID_TRAY_DEBUG  = 1005;
     static constexpr UINT ID_TRAY_SHADER_BASE = 2000;
     static constexpr UINT ID_TRAY_SHADER_MAX  = 2500;
 #endif

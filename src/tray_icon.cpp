@@ -44,6 +44,9 @@ LRESULT CALLBACK TrayIcon::TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         case ID_TRAY_QUIT:
             if (instance_->callbacks_.onQuit) instance_->callbacks_.onQuit();
             break;
+        case ID_TRAY_DEBUG:
+            if (instance_->callbacks_.onToggleDebug) instance_->callbacks_.onToggleDebug();
+            break;
         default:
             if (cmdId >= ID_TRAY_SHADER_BASE && cmdId < ID_TRAY_SHADER_MAX) {
                 size_t idx = cmdId - ID_TRAY_SHADER_BASE;
@@ -141,6 +144,8 @@ void TrayIcon::RebuildMenu() {
     AppendMenuW(menu_, MF_STRING, ID_TRAY_RESUME, L"Resume");
     AppendMenuW(menu_, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu_, MF_STRING, ID_TRAY_RELOAD, L"Reload Shader");
+    AppendMenuW(menu_, MF_STRING | (showDebug_ ? MF_CHECKED : MF_UNCHECKED),
+                ID_TRAY_DEBUG, L"Debug Overlay");
 
     // Shader 切换子菜单
     if (!shaderPaths_.empty()) {
@@ -237,6 +242,10 @@ void TrayIcon::SetShaderList(const std::vector<std::string>& glslFiles,
     shaderPaths_.insert(shaderPaths_.end(), dirFiles_.begin(), dirFiles_.end());
 }
 
+void TrayIcon::SetDebugState(bool showDebug) {
+    showDebug_ = showDebug;
+}
+
 void TrayIcon::Destroy() {
     if (created_) {
         Shell_NotifyIconW(NIM_DELETE, &nid_);
@@ -268,5 +277,6 @@ void TrayIcon::SetShaderList(const std::vector<std::string>&,
                               const std::vector<std::string>&,
                               const std::vector<std::string>&,
                               const std::string&) {}
+void TrayIcon::SetDebugState(bool) {}
 
 #endif

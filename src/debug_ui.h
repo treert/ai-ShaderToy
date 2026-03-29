@@ -76,6 +76,9 @@ public:
     /// ImGui 是否想要捕获键盘
     bool WantCaptureKeyboard() const;
 
+    /// 是否已初始化
+    bool IsInitialized() const { return initialized_; }
+
 private:
     bool initialized_ = false;
     bool visible_     = false;
