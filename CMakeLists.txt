@@ -98,6 +98,7 @@ set(SOURCES
     src/tray_icon.cpp
     src/debug_ui.cpp
     src/shader_project.cpp
+    src/file_dialog.cpp
     src/app.rc
     ${IMGUI_SOURCES}
 )
@@ -113,6 +114,7 @@ set(HEADERS
     src/tray_icon.h
     src/debug_ui.h
     src/shader_project.h
+    src/file_dialog.h
     src/stb_image.h
 )
 
@@ -131,6 +133,9 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     opengl32
     nlohmann_json::nlohmann_json
     dwmapi
+    ole32
+    shell32
+    uuid
 )
 
 # MSVC: 禁用 C4005（APIENTRY 宏重定义，GLAD 与 Windows SDK 冲突）

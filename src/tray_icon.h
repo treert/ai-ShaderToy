@@ -21,6 +21,7 @@ public:
         std::function<void()> onQuit;
         std::function<void(const std::string&)> onSwitchShader;
         std::function<void()> onToggleDebug;
+        std::function<void()> onBrowseShader;
     };
 
     TrayIcon();
@@ -81,6 +82,7 @@ private:
     static constexpr UINT ID_TRAY_RELOAD = 1003;
     static constexpr UINT ID_TRAY_QUIT   = 1004;
     static constexpr UINT ID_TRAY_DEBUG  = 1005;
+    static constexpr UINT ID_TRAY_BROWSE = 1006;
     static constexpr UINT ID_TRAY_SHADER_BASE = 2000;
     static constexpr UINT ID_TRAY_SHADER_MAX  = 2500;
 #endif

@@ -159,6 +159,13 @@ void DebugUI::Render(DebugUIState& state) {
                 state.requestResetTime = true;
             }
 
+            ImGui::SameLine();
+
+            // 浏览 shader 文件/文件夹
+            if (ImGui::Button("Browse Shader...")) {
+                state.requestBrowseShader = true;
+            }
+
             // FPS 滑条
             ImGui::SliderInt("Target FPS", &state.targetFPS, 1, 120);
 

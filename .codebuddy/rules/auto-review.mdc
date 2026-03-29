@@ -1,0 +1,16 @@
+---
+description: 完成编码后必须主动进行 code review
+globs:
+alwaysApply: true
+---
+
+## 编码完成后自动 Review
+
+每次完成编码任务后，必须主动按照 `.codebuddy/agents/reviewer.md` 的规范进行 code review，不需要用户要求。
+
+### 审查流程
+1. 从 5 个维度全面审查：功能正确性、代码质量、健壮性、性能、安全性
+2. 区分 **BLOCKING**（必须修复）和 **SUGGESTION**（建议优化）两个级别
+3. 输出标准审查报告（审查范围、BLOCKING 列表、SUGGESTION 列表、结论）
+4. 有 BLOCKING 问题时**自行修复并重新 review**，循环直到所有 BLOCKING 解决
+5. 给出 **APPROVED** 后才停止工作，等待用户继续对话

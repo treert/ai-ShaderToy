@@ -47,6 +47,9 @@ LRESULT CALLBACK TrayIcon::TrayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         case ID_TRAY_DEBUG:
             if (instance_->callbacks_.onToggleDebug) instance_->callbacks_.onToggleDebug();
             break;
+        case ID_TRAY_BROWSE:
+            if (instance_->callbacks_.onBrowseShader) instance_->callbacks_.onBrowseShader();
+            break;
         default:
             if (cmdId >= ID_TRAY_SHADER_BASE && cmdId < ID_TRAY_SHADER_MAX) {
                 size_t idx = cmdId - ID_TRAY_SHADER_BASE;
@@ -146,6 +149,7 @@ void TrayIcon::RebuildMenu() {
     AppendMenuW(menu_, MF_STRING, ID_TRAY_RELOAD, L"Reload Shader");
     AppendMenuW(menu_, MF_STRING | (showDebug_ ? MF_CHECKED : MF_UNCHECKED),
                 ID_TRAY_DEBUG, L"Debug Overlay");
+    AppendMenuW(menu_, MF_STRING, ID_TRAY_BROWSE, L"Open Shader...");
 
     // Shader 切换子菜单
     if (!shaderPaths_.empty()) {

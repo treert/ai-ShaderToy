@@ -43,3 +43,4 @@ Desktop.ini
 .codebuddy/*
 !.codebuddy/rules/
 !.codebuddy/commands/
+!.codebuddy/agents/

@@ -28,6 +28,7 @@ struct DebugUIState {
     // === 一次性动作标志（DebugUI 置 true，main.cpp 消费后重置） ===
     bool requestReload    = false;
     bool requestResetTime = false;
+    bool requestBrowseShader = false;  // 请求打开文件对话框选择 shader
     std::string requestSwitchShader;  // 非空 = 请求切换到该路径的 shader
 
     // === Shader 文件列表（main.cpp 填充，DebugUI 读取展示，按类型分组） ===

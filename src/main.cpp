@@ -28,6 +28,7 @@
 #include "file_watcher.h"
 #include "tray_icon.h"
 #include "debug_ui.h"
+#include "file_dialog.h"
 
 // 默认参数
 static const int    kDefaultWidth  = 800;
@@ -635,6 +636,12 @@ int main(int argc, char* argv[]) {
             std::cout << "Tray: switch shader to " << path << std::endl;
         };
         cb.onToggleDebug = [&]() { trayDebugToggleRequest = true; };
+        cb.onBrowseShader = [&]() {
+            std::string path = BrowseAndValidateShader();
+            if (!path.empty()) {
+                trayShaderSwitchRequest = path;
+            }
+        };
         tray.Create(window, cb);
         tray.SetDebugState(config.showDebug);
 
@@ -918,6 +925,14 @@ int main(int argc, char* argv[]) {
 
         // 处理 DebugUI 控制请求
         if (!config.wallpaperMode) {
+            // 浏览 shader 文件/文件夹请求
+            if (debugState.requestBrowseShader) {
+                debugState.requestBrowseShader = false;
+                std::string path = BrowseAndValidateShader();
+                if (!path.empty()) {
+                    debugState.requestSwitchShader = path;
+                }
+            }
             // shader 切换请求
             if (!debugState.requestSwitchShader.empty()) {
                 config.shaderPath = debugState.requestSwitchShader;
