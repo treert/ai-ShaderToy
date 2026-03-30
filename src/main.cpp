@@ -64,8 +64,8 @@ struct AppConfig {
     bool        useD3D11Mode = false; // 窗口模式使用 D3D11 渲染（--d3d11）
     int         width  = kDefaultWidth;
     int         height = kDefaultHeight;
-    int         targetFPS = -1;      // -1 表示未指定，壁纸模式默认30，窗口模式默认60
-    float       renderScale = 0.0f;  // 渲染分辨率缩放，0=自动（壁纸模式0.5，窗口模式1.0）
+    int         targetFPS = -1;      // -1 表示未指定，默认60
+    float       renderScale = 0.0f;  // 渲染分辨率缩放，0=自动（默认1.0）
     int         monitorIndex = -1;   // 壁纸模式：指定显示器索引，-1=所有显示器
     bool        pauseOnFullscreen = true; // 壁纸模式：全屏应用遮挡时暂停渲染
 };
@@ -169,8 +169,8 @@ static void PrintUsage(const char* programName) {
               << "  --no-hotreload       Disable shader hot reload\n"
               << "  --width <n>          Window width (default: " << kDefaultWidth << ")\n"
               << "  --height <n>         Window height (default: " << kDefaultHeight << ")\n"
-              << "  --fps <n>            Target FPS (wallpaper default: 30, window default: 60)\n"
-              << "  --renderscale <f>    Render resolution scale 0.0-1.0 (wallpaper default: 0.5, window default: 1.0)\n"
+              << "  --fps <n>            Target FPS (default: 60)\n"
+              << "  --renderscale <f>    Render resolution scale 0.0-1.0 (default: 1.0)\n"
               << "  --debug              Show debug overlay in wallpaper mode (default: off)\n"
               << "  --no-pause-on-fullscreen  Disable auto-pause when fullscreen app covers desktop\n"
               << "  --translate          Translate shader (GLSL->HLSL) and save to Logs directory, then exit\n"
@@ -631,10 +631,10 @@ int main(int argc, char* argv[]) {
 
     // 应用模式相关的默认值
     if (config.targetFPS < 0) {
-        config.targetFPS = config.wallpaperMode ? 30 : 60;
+        config.targetFPS = 60;
     }
     if (config.renderScale <= 0.0f) {
-        config.renderScale = config.wallpaperMode ? 0.5f : 1.0f;
+        config.renderScale = 1.0f;
     }
 
     if (glContext) {
