@@ -261,6 +261,10 @@ int main(int argc, char* argv[]) {
         int x = 0, y = 0;          // 显示器屏幕坐标
         int width = 0, height = 0;
         bool occluded = false;      // 是否被窗口遮挡（遮挡时跳过渲染）
+        float clickTime = -10.0f;   // 该显示器上最近一次点击的 iTime（per-monitor）
+        float clickLocalX = 0.0f;   // 该显示器上最近一次点击的局部坐标 X
+        float clickLocalY = 0.0f;   // 该显示器上最近一次点击的局部坐标 Y
+        bool clickActive = false;   // 该显示器上是否有活跃的点击（按下状态）
         std::unique_ptr<BlitRenderer> blit; // 每个显示器独立的 BlitRenderer（不同分辨率各自持有 FBO）— 窗口模式 OpenGL 用
         int d3dSwapChainIndex = -1; // D3D11 SwapChain 索引（壁纸模式用）
         std::unique_ptr<D3D11BlitRenderer> d3dBlit; // D3D11 降分辨率渲染器
@@ -1147,12 +1151,28 @@ int main(int argc, char* argv[]) {
                 mouse[2] = mouse[0];
                 mouse[3] = mouse[1];
                 Uint64 clickNow = SDL_GetPerformanceCounter();
-                clickTime = static_cast<float>(clickNow - startTime) / static_cast<float>(freq);
+                float clickTimeNow = static_cast<float>(clickNow - startTime) / static_cast<float>(freq);
+                clickTime = clickTimeNow;  // 全局（Buffer pass 用）
+                // 按显示器归属更新 per-monitor clickTime 和点击局部坐标
+                for (auto& ww : wallpaperWindows) {
+                    if (pt.x >= ww.x && pt.x < ww.x + ww.width &&
+                        pt.y >= ww.y && pt.y < ww.y + ww.height) {
+                        ww.clickTime = clickTimeNow;
+                        ww.clickLocalX = static_cast<float>(pt.x - ww.x);
+                        ww.clickLocalY = static_cast<float>(ww.height) - static_cast<float>(pt.y - ww.y);
+                        ww.clickActive = true;
+                    }
+                }
             } else if (!leftDown && mousePressed) {
-                // 刚松开
+                // 刚松开 — 标记所有活跃显示器的点击为释放状态
                 mousePressed = false;
                 mouse[2] = -mouse[2];
                 mouse[3] = -mouse[3];
+                for (auto& ww : wallpaperWindows) {
+                    if (ww.clickActive) {
+                        ww.clickActive = false;
+                    }
+                }
             }
         }
 #endif
@@ -1463,12 +1483,9 @@ int main(int argc, char* argv[]) {
                     bool inMon = (localX >= 0 && localX < ww.width && localY >= 0 && localY < ww.height);
                     localMouse[0] = inMon ? localX : -1.0f;
                     localMouse[1] = inMon ? localY : -1.0f;
-                    float cAX = fabsf(mouse[2]), cAY = fabsf(mouse[3]);
-                    float cLX = cAX - static_cast<float>(ww.x);
-                    float cLY = static_cast<float>(ww.height) - (cAY - static_cast<float>(ww.y));
-                    bool cIn = (cLX >= 0 && cLX < ww.width && cLY >= 0 && cLY < ww.height);
-                    localMouse[2] = cIn ? ((mouse[2] >= 0) ? cLX : -cLX) : 0.0f;
-                    localMouse[3] = cIn ? ((mouse[3] >= 0) ? cLY : -cLY) : 0.0f;
+                    // 使用 per-monitor 记录的点击局部坐标（不受其他显示器点击影响）
+                    localMouse[2] = ww.clickActive ? ww.clickLocalX : -ww.clickLocalX;
+                    localMouse[3] = ww.clickActive ? ww.clickLocalY : -ww.clickLocalY;
 
                     Uint64 imageStart = SDL_GetPerformanceCounter();
 
@@ -1481,7 +1498,7 @@ int main(int argc, char* argv[]) {
                                             localMouse[2]*config.renderScale, localMouse[3]*config.renderScale };
                         d3dMultiPass->SetImageTargetRTV(ww.d3dBlit->GetRenderRTV(), rW, rH);
                         d3dMultiPass->RenderImagePass(ctx, currentTime, timeDelta, frameCount,
-                                                       sMouse, date, rW, rH, clickTime);
+                                                       sMouse, date, rW, rH, ww.clickTime);
                         d3dRenderer->BeginFrame(ww.d3dSwapChainIndex);
                         ctx->VSSetShader(d3dRenderer->GetFullscreenVS(), nullptr, 0);
                         ww.d3dBlit->BlitToTarget(d3dRenderer->GetBackBufferRTV(ww.d3dSwapChainIndex),
@@ -1491,7 +1508,7 @@ int main(int argc, char* argv[]) {
                         d3dRenderer->BeginFrame(ww.d3dSwapChainIndex);
                         ctx->VSSetShader(d3dRenderer->GetFullscreenVS(), nullptr, 0);
                         d3dMultiPass->RenderImagePass(ctx, currentTime, timeDelta, frameCount,
-                                                       localMouse, date, ww.width, ww.height, clickTime);
+                                                       localMouse, date, ww.width, ww.height, ww.clickTime);
                     }
 
                     d3dRenderer->Present(ww.d3dSwapChainIndex, 0);
@@ -1564,21 +1581,9 @@ int main(int argc, char* argv[]) {
                 localMouse[0] = inThisMonitor ? localX : -1.0f;
                 localMouse[1] = inThisMonitor ? localY : -1.0f;
 
-                // zw（点击位置）也转局部
-                float clickAbsX = fabsf(mouse[2]);
-                float clickAbsY = fabsf(mouse[3]);
-                float clickLocalX = clickAbsX - static_cast<float>(ww.x);
-                float clickLocalY = static_cast<float>(ww.height) - (clickAbsY - static_cast<float>(ww.y));
-                bool clickInThis = (clickLocalX >= 0 && clickLocalX < ww.width &&
-                                    clickLocalY >= 0 && clickLocalY < ww.height);
-
-                if (clickInThis) {
-                    localMouse[2] = (mouse[2] >= 0) ? clickLocalX : -clickLocalX;
-                    localMouse[3] = (mouse[3] >= 0) ? clickLocalY : -clickLocalY;
-                } else {
-                    localMouse[2] = 0.0f;
-                    localMouse[3] = 0.0f;
-                }
+                // 使用 per-monitor 记录的点击局部坐标（不受其他显示器点击影响）
+                localMouse[2] = ww.clickActive ? ww.clickLocalX : -ww.clickLocalX;
+                localMouse[3] = ww.clickActive ? ww.clickLocalY : -ww.clickLocalY;
 
                 Uint64 imageStart = SDL_GetPerformanceCounter();
 
@@ -1597,13 +1602,13 @@ int main(int argc, char* argv[]) {
 
                     multiPass.SetImageTargetFBO(ww.blit->GetRenderFBO());
                     multiPass.RenderImagePass(quadVAO, currentTime, timeDelta, frameCount,
-                                             scaledMouse, date, curRenderW, curRenderH, clickTime);
+                                             scaledMouse, date, curRenderW, curRenderH, ww.clickTime);
 
                     ww.blit->BlitToScreen(ww.width, ww.height);
                 } else {
                     multiPass.SetImageTargetFBO(0);
                     multiPass.RenderImagePass(quadVAO, currentTime, timeDelta, frameCount,
-                                             localMouse, date, ww.width, ww.height, clickTime);
+                                             localMouse, date, ww.width, ww.height, ww.clickTime);
                 }
 
                 glFinish();
