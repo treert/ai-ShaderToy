@@ -986,6 +986,23 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        // HLSL 翻译输出：先 dump 再 setup，确保编译失败也能输出 HLSL 方便调试
+        {
+            namespace fs = std::filesystem;
+            fs::path srcPath(config.shaderPath);
+            std::string sName = srcPath.stem().string();
+            if (fs::is_directory(srcPath)) {
+                sName = srcPath.filename().string();
+            }
+            std::string subDir = config.wallpaperMode ? "wallpaper-mode" : "window-mode";
+            fs::path outDir = GetLogDir() / subDir;
+            std::cout << "HLSL dump (" << subDir << "): " << config.shaderPath << std::endl;
+            int errors = TranslateAndDumpHlsl(project.GetData(), sName, outDir);
+            if (errors > 0) {
+                std::cerr << "WARNING: " << errors << " pass(es) had HLSL compile errors." << std::endl;
+            }
+        }
+
         if (!SetupD3D11MultiPass(projData)) {
             std::cerr << "Failed to setup D3D11 multi-pass: "
                       << (d3dMultiPass ? d3dMultiPass->GetLastError() : "null") << std::endl;
@@ -998,8 +1015,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Shader loaded: " << config.shaderPath
               << (projData.isMultiPass ? " (multi-pass)" : " (single-pass)") << std::endl;
 
-
-    // HLSL 翻译输出：任何使用 D3D11 的模式都自动 dump HLSL 到对应目录
+    // HLSL 翻译输出 lambda（热加载时复用）
     auto dumpHlsl = [&]() {
 #ifdef _WIN32
         if (!useD3D11) return;
@@ -1018,7 +1034,6 @@ int main(int argc, char* argv[]) {
         }
 #endif
     };
-    dumpHlsl();
 
     // ============================================================
     // 热加载
@@ -1605,6 +1620,7 @@ int main(int argc, char* argv[]) {
                     } else {
                         lastShaderError = d3dMultiPass ? d3dMultiPass->GetLastError() : "D3D11 setup failed";
                         std::cerr << "D3D11 Shader reload failed: " << lastShaderError << std::endl;
+                        dumpHlsl(); // 编译失败也输出 HLSL，方便调试
                     }
                 } else
 #endif
