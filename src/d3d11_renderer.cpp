@@ -21,7 +21,8 @@ VSOutput main(uint vertexId : SV_VertexID) {
     // vertexId: 0 -> (-1,-1), 1 -> (3,-1), 2 -> (-1,3)
     float2 uv = float2((vertexId << 1) & 2, vertexId & 2);
     output.position = float4(uv * 2.0 - 1.0, 0.0, 1.0);
-    // 翻转 Y 使 (0,0) 在左下角（与 ShaderToy/OpenGL 一致）
+    // 翻转 Y：修正三角形绕序（防止被 D3D11 默认背面剔除）
+    // 同时使 SV_Position.y 在底部=小值、顶部=大值（模拟 OpenGL gl_FragCoord.y）
     output.position.y = -output.position.y;
     output.texcoord = uv;
     return output;

@@ -231,6 +231,23 @@ static std::string CrossCompileToHlsl(const std::vector<uint32_t>& spirv,
             hlsl = std::regex_replace(hlsl, prefixRe, memberName);
         }
 
+        // 后处理：D3D11 SV_Position.y 是 top-down（top=0.5, bottom=H-0.5）
+        // 而 OpenGL gl_FragCoord.y 是 bottom-up（bottom=0.5, top=H-0.5）
+        // SPIRV-Cross 生成的 main() 中固定有：
+        //   gl_FragCoord = stage_input.gl_FragCoord;
+        //   gl_FragCoord.w = 1.0 / gl_FragCoord.w;
+        // 在 .w 修正之后插入 Y 翻转
+        {
+            const std::string wLine = "gl_FragCoord.w = 1.0 / gl_FragCoord.w;";
+            size_t wPos = hlsl.find(wLine);
+            if (wPos != std::string::npos) {
+                size_t insertPos = wPos + wLine.size();
+                hlsl.insert(insertPos,
+                    "\n    gl_FragCoord.y = iResolution.y - gl_FragCoord.y;"
+                );
+            }
+        }
+
         return hlsl;
     } catch (const spirv_cross::CompilerError& e) {
         errorsOut = "SPIRV-Cross error: ";
@@ -469,6 +486,7 @@ float4 _fetchTex2D(Texture2D<float4> tex, int2 coord, int lod) { return tex.Load
 struct PSInput { float4 position : SV_Position; float2 texcoord : TEXCOORD0; };
 float4 main(PSInput input) : SV_Target {
     float4 fragColor = float4(0.0, 0.0, 0.0, 1.0);
+    // D3D11 SV_Position.y: top=0.5, bottom=H-0.5 → 翻转为 ShaderToy bottom=0 top=H
     float2 fragCoord = float2(input.position.x, iResolution.y - input.position.y);
     float2 uv = fragCoord / iResolution.xy * 2.0 - 1.0;
     float3 rayDir = normalize(_cubeFaceDir.xyz + uv.x * _cubeFaceRight.xyz + uv.y * _cubeFaceUp.xyz);
@@ -482,6 +500,7 @@ float4 main(PSInput input) : SV_Target {
 struct PSInput { float4 position : SV_Position; float2 texcoord : TEXCOORD0; };
 float4 main(PSInput input) : SV_Target {
     float4 fragColor = float4(0.0, 0.0, 0.0, 1.0);
+    // D3D11 SV_Position.y: top=0.5, bottom=H-0.5 → 翻转为 ShaderToy bottom=0 top=H
     float2 fragCoord = float2(input.position.x, iResolution.y - input.position.y);
     mainImage(fragColor, fragCoord);
     return fragColor;
