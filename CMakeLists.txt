@@ -73,6 +73,44 @@ else()
     FetchContent_MakeAvailable(nlohmann_json)
 endif()
 
+# --- SPIRV-Cross 翻译管线（glslang + SPIRV-Cross） ---
+option(USE_SPIRV_CROSS "Use glslang + SPIRV-Cross for GLSL->HLSL translation (OFF = regex fallback)" ON)
+if(USE_SPIRV_CROSS)
+    message(STATUS "SPIRV-Cross translation pipeline: ENABLED")
+
+    # glslang — 关闭不需要的组件
+    set(ENABLE_GLSLANG_BINARIES OFF CACHE BOOL "" FORCE)
+    set(ENABLE_HLSL             OFF CACHE BOOL "" FORCE)  # glslang 自带的 HLSL 前端，我们不需要
+    set(ENABLE_CTEST            OFF CACHE BOOL "" FORCE)
+    set(ENABLE_OPT              OFF CACHE BOOL "" FORCE)  # SPIRV-Tools optimizer，不需要
+    set(BUILD_TESTING           OFF CACHE BOOL "" FORCE)
+    set(SKIP_GLSLANG_INSTALL    ON  CACHE BOOL "" FORCE)
+    FetchContent_Declare(glslang
+        GIT_REPOSITORY https://github.com/KhronosGroup/glslang.git
+        GIT_TAG        16.2.0
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(glslang)
+
+    # SPIRV-Cross — 只需要静态库，关闭 CLI/测试/共享库
+    set(SPIRV_CROSS_CLI         OFF CACHE BOOL "" FORCE)
+    set(SPIRV_CROSS_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+    set(SPIRV_CROSS_SHARED      OFF CACHE BOOL "" FORCE)
+    set(SPIRV_CROSS_STATIC      ON  CACHE BOOL "" FORCE)
+    set(SPIRV_CROSS_ENABLE_MSL  OFF CACHE BOOL "" FORCE)
+    set(SPIRV_CROSS_ENABLE_CPP  OFF CACHE BOOL "" FORCE)
+    set(SPIRV_CROSS_ENABLE_REFLECT OFF CACHE BOOL "" FORCE)
+    set(SPIRV_CROSS_ENABLE_C_API OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(spirv_cross
+        GIT_REPOSITORY https://github.com/KhronosGroup/SPIRV-Cross.git
+        GIT_TAG        vulkan-sdk-1.4.304.0
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(spirv_cross)
+else()
+    message(STATUS "SPIRV-Cross translation pipeline: DISABLED (regex fallback)")
+endif()
+
 # ============================================================
 # 主程序
 # ============================================================
@@ -141,6 +179,14 @@ target_include_directories(${PROJECT_NAME} PRIVATE
     ${imgui_SOURCE_DIR}/backends
 )
 
+# SPIRV-Cross 管线 include 路径
+if(USE_SPIRV_CROSS)
+    target_include_directories(${PROJECT_NAME} PRIVATE
+        ${glslang_SOURCE_DIR}        # glslang/Public/ShaderLang.h, SPIRV/GlslangToSpv.h
+        ${spirv_cross_SOURCE_DIR}    # spirv_hlsl.hpp
+    )
+endif()
+
 target_link_libraries(${PROJECT_NAME} PRIVATE
     SDL2::SDL2-static
     SDL2::SDL2main
@@ -155,6 +201,18 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     dxgi
     d3dcompiler
 )
+
+# SPIRV-Cross 翻译管线链接
+if(USE_SPIRV_CROSS)
+    target_link_libraries(${PROJECT_NAME} PRIVATE
+        glslang
+        SPIRV
+        spirv-cross-core
+        spirv-cross-hlsl
+        glslang-default-resource-limits
+    )
+    target_compile_definitions(${PROJECT_NAME} PRIVATE USE_SPIRV_CROSS=1)
+endif()
 
 # MSVC: 禁用 C4005（APIENTRY 宏重定义，GLAD 与 Windows SDK 冲突）
 if(MSVC)

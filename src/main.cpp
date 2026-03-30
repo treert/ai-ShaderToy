@@ -267,9 +267,22 @@ static int TranslateAndDumpHlsl(const ShaderProjectData& data,
                         const std::string& fileName,
                         const std::array<ChannelType, 4>& chTypes,
                         bool isCubeMap) {
-        std::string translated = TranslateGlslToHlsl(passCode);
-        std::string fullHlsl = WrapShaderToyHlsl(translated, chTypes,
-                                                  data.commonSource, isCubeMap);
+        std::string translateErrors;
+        std::string fullHlsl = TranslateGlslToFullHlsl(passCode, chTypes,
+                                                         data.commonSource, isCubeMap,
+                                                         &translateErrors);
+
+        if (fullHlsl.empty()) {
+            // 翻译失败，写入错误信息
+            fullHlsl = "// GLSL->HLSL translation failed\n/*\n" + translateErrors + "\n*/\n";
+            compileErrors++;
+
+            fs::path outPath = outDir / fileName;
+            std::ofstream ofs(outPath, std::ios::out | std::ios::trunc);
+            if (ofs.is_open()) { ofs << fullHlsl; ofs.close(); }
+            std::cerr << "  -> " << outPath.string() << "  [TRANSLATE ERROR]" << std::endl;
+            return;
+        }
 
         std::string compileErrorMsg;
         bool compileOk = CompileHlslForValidation(fullHlsl, fileName, compileErrorMsg);
@@ -344,6 +357,7 @@ static int TranslateAndDumpHlsl(const ShaderProjectData& data,
 
 int main(int argc, char* argv[]) {
     InitConsole();  // 先附加控制台（让 --help 能输出）
+    InitShaderTranslator();  // 初始化 glslang（SPIRV-Cross 管线）
 
     // 声明 DPI 感知，确保多显示器不同 DPI 时获取正确的物理像素尺寸
 #ifdef _WIN32
@@ -386,6 +400,7 @@ int main(int argc, char* argv[]) {
             std::cerr << "WARNING: " << compileErrors << " pass(es) had HLSL compile errors. "
                       << "Check the .hlsl files for error details." << std::endl;
         }
+        ShutdownShaderTranslator();
         return 0;
     }
 
@@ -2136,6 +2151,7 @@ int main(int argc, char* argv[]) {
     }
     SDL_Quit();
 
+    ShutdownShaderTranslator();  // 清理 glslang
     std::cout << "Goodbye!" << std::endl;
     return 0;
 }

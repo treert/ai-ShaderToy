@@ -68,11 +68,16 @@ bool D3D11ShaderManager::LoadFromSource(const std::string& glslSource) {
     // 释放旧资源
     pixelShader_.Reset();
 
-    // 翻译 GLSL -> HLSL
-    std::string translatedHlsl = TranslateGlslToHlsl(glslSource);
-
-    // 用 HLSL 模板包装
-    std::string fullHlsl = WrapShaderToyHlsl(translatedHlsl);
+    // 翻译 GLSL -> HLSL（SPIRV-Cross 管线或旧正则翻译器）
+    std::string translateErrors;
+    std::string fullHlsl = TranslateGlslToFullHlsl(glslSource, channelTypes_,
+                                                     commonSource_, isCubeMapPass_,
+                                                     &translateErrors);
+    if (fullHlsl.empty()) {
+        lastError_ = "GLSL->HLSL translation failed:\n" + translateErrors;
+        std::cerr << lastError_ << std::endl;
+        return false;
+    }
 
     // 编译 HLSL
     ComPtr<ID3D10Blob> shaderBlob;
