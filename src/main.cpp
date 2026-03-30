@@ -231,6 +231,113 @@ static AppConfig ParseArgs(int argc, char* argv[]) {
     return config;
 }
 
+/// 将 ShaderProjectData 中所有 pass 翻译为 HLSL 并保存到指定目录，同时用 D3DCompile 验证。
+/// @param data         已加载的 shader 项目数据
+/// @param shaderName   shader 名称（用于单 pass 的文件名）
+/// @param outDir       输出目录路径（多 pass 时各 pass 文件直接放在此目录下）
+/// @return 编译失败的 pass 数量（0 表示全部通过）
+static int TranslateAndDumpHlsl(const ShaderProjectData& data,
+                                const std::string& shaderName,
+                                const std::filesystem::path& outDir) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::create_directories(outDir, ec);
+
+    auto getChannelTypes = [](const PassData& pass) {
+        std::array<ChannelType, 4> types = {
+            ChannelType::Texture2D, ChannelType::Texture2D,
+            ChannelType::Texture2D, ChannelType::Texture2D
+        };
+        for (int i = 0; i < 4; ++i) {
+            if (pass.channels[i].source != ChannelBinding::Source::None) {
+                types[i] = pass.channels[i].textureType;
+            }
+        }
+        return types;
+    };
+
+    int compileErrors = 0;
+
+    // 翻译并保存一个 pass，同时编译验证
+    auto dumpPass = [&](const std::string& passCode,
+                        const std::string& fileName,
+                        const std::array<ChannelType, 4>& chTypes,
+                        bool isCubeMap) {
+        std::string translated = TranslateGlslToHlsl(passCode);
+        std::string fullHlsl = WrapShaderToyHlsl(translated, chTypes,
+                                                  data.commonSource, isCubeMap);
+
+        std::string compileErrorMsg;
+        bool compileOk = CompileHlslForValidation(fullHlsl, fileName, compileErrorMsg);
+
+        if (!compileOk) {
+            fullHlsl += "\n\n/*\n=== HLSL Compile Errors ===\n";
+            fullHlsl += compileErrorMsg;
+            fullHlsl += "\n=== End Compile Errors ===\n*/\n";
+            compileErrors++;
+        }
+
+        fs::path outPath = outDir / fileName;
+        std::ofstream ofs(outPath, std::ios::out | std::ios::trunc);
+        if (!ofs.is_open()) {
+            std::cerr << "Failed to write: " << outPath.string() << std::endl;
+            return;
+        }
+        ofs << fullHlsl;
+        ofs.close();
+
+        if (compileOk) {
+            std::cout << "  -> " << outPath.string() << "  [OK]" << std::endl;
+        } else {
+            std::cerr << "  -> " << outPath.string() << "  [COMPILE ERROR]" << std::endl;
+            std::cerr << compileErrorMsg << std::endl;
+        }
+    };
+
+    bool isMulti = data.isMultiPass || data.hasCubeMapPass || !data.commonSource.empty();
+
+    if (!isMulti) {
+        auto chTypes = getChannelTypes(data.imagePass);
+        dumpPass(data.imagePass.code, shaderName + ".hlsl", chTypes, false);
+    } else {
+        // Common 段
+        if (!data.commonSource.empty()) {
+            std::string commonHlsl = TranslateGlslToHlsl(data.commonSource);
+            fs::path commonPath = outDir / "common.hlsl";
+            std::ofstream ofs(commonPath, std::ios::out | std::ios::trunc);
+            if (ofs.is_open()) {
+                ofs << "// Common code (translated from GLSL)\n" << commonHlsl;
+                ofs.close();
+                std::cout << "  -> " << commonPath.string() << std::endl;
+            }
+        }
+
+        // CubeMap pass
+        if (data.hasCubeMapPass) {
+            auto chTypes = getChannelTypes(data.cubeMapPass);
+            dumpPass(data.cubeMapPass.code, "cube_a.hlsl", chTypes, true);
+        }
+
+        // Buffer passes
+        for (size_t bi = 0; bi < data.bufferPasses.size(); ++bi) {
+            const auto& bp = data.bufferPasses[bi];
+            std::string fname = "buf_";
+            fname += static_cast<char>('a' + bi);
+            fname += ".hlsl";
+            auto chTypes = getChannelTypes(bp);
+            dumpPass(bp.code, fname, chTypes, false);
+        }
+
+        // Image pass
+        {
+            auto chTypes = getChannelTypes(data.imagePass);
+            dumpPass(data.imagePass.code, "image.hlsl", chTypes, false);
+        }
+    }
+
+    return compileErrors;
+}
+
 int main(int argc, char* argv[]) {
     InitConsole();  // 先附加控制台（让 --help 能输出）
 
@@ -259,137 +366,18 @@ int main(int argc, char* argv[]) {
         namespace fs = std::filesystem;
         fs::path srcPath(config.shaderPath);
         std::string shaderName = srcPath.stem().string();
-        // 目录模式：用目录名作为 shader 名
         if (fs::is_directory(srcPath)) {
             shaderName = srcPath.filename().string();
         }
 
         auto logDir = GetLogDir();
         bool isMulti = data.isMultiPass || data.hasCubeMapPass || !data.commonSource.empty();
-
-        // 确定输出目录：多 pass 放子目录，单 pass 直接放 Logs
         fs::path outDir = isMulti ? (logDir / shaderName) : logDir;
-        std::error_code ec;
-        fs::create_directories(outDir, ec);
-
-        // 从 pass 数据中推断通道类型（用于 WrapShaderToyHlsl 的纹理声明）
-        auto getChannelTypes = [](const PassData& pass) {
-            std::array<ChannelType, 4> types = {
-                ChannelType::Texture2D, ChannelType::Texture2D,
-                ChannelType::Texture2D, ChannelType::Texture2D
-            };
-            for (int i = 0; i < 4; ++i) {
-                if (pass.channels[i].source != ChannelBinding::Source::None) {
-                    types[i] = pass.channels[i].textureType;
-                }
-            }
-            return types;
-        };
-
-        int compileErrors = 0;  // 编译失败计数
-
-        // 翻译并保存一个 pass，然后编译验证
-        auto translatePass = [&](const std::string& passCode,
-                                 const std::string& fileName,
-                                 const std::array<ChannelType, 4>& chTypes,
-                                 bool isCubeMap) -> bool {
-            std::string translated = TranslateGlslToHlsl(passCode);
-            std::string fullHlsl = WrapShaderToyHlsl(translated, chTypes,
-                                                      data.commonSource, isCubeMap);
-
-            // 编译验证
-            std::string compileErrorMsg;
-            bool compileOk = CompileHlslForValidation(fullHlsl, fileName, compileErrorMsg);
-
-            // 如果编译失败，在 HLSL 源码末尾追加错误信息注释
-            if (!compileOk) {
-                fullHlsl += "\n\n/*\n=== HLSL Compile Errors ===\n";
-                fullHlsl += compileErrorMsg;
-                fullHlsl += "\n=== End Compile Errors ===\n*/\n";
-                compileErrors++;
-            }
-
-            fs::path outPath = outDir / fileName;
-            std::ofstream ofs(outPath, std::ios::out | std::ios::trunc);
-            if (!ofs.is_open()) {
-                std::cerr << "Failed to write: " << outPath.string() << std::endl;
-                return false;
-            }
-            ofs << fullHlsl;
-            ofs.close();
-
-            if (compileOk) {
-                std::cout << "  -> " << outPath.string() << "  [OK]" << std::endl;
-            } else {
-                std::cerr << "  -> " << outPath.string() << "  [COMPILE ERROR]" << std::endl;
-                std::cerr << compileErrorMsg << std::endl;
-            }
-            return true;
-        };
 
         std::cout << "Translating GLSL -> HLSL: " << config.shaderPath << std::endl;
+        int compileErrors = TranslateAndDumpHlsl(data, shaderName, outDir);
 
-        int passCount = 0;
-
-        if (!isMulti) {
-            // 单 pass：直接输出 <shader_name>.hlsl
-            auto chTypes = getChannelTypes(data.imagePass);
-            if (!translatePass(data.imagePass.code, shaderName + ".hlsl", chTypes, false)) {
-                return 1;
-            }
-            passCount = 1;
-        } else {
-            // 多 pass：每个 pass 各一个文件，放在 Logs/<shader_name>/ 子目录
-
-            // Common 段单独保存（原始 GLSL + 翻译后的 HLSL）
-            if (!data.commonSource.empty()) {
-                // 保存翻译后的 common（仅代码段，不含 cbuffer/main）
-                std::string commonHlsl = TranslateGlslToHlsl(data.commonSource);
-                fs::path commonPath = outDir / "common.hlsl";
-                std::ofstream ofs(commonPath, std::ios::out | std::ios::trunc);
-                if (ofs.is_open()) {
-                    ofs << "// Common code (translated from GLSL)\n" << commonHlsl;
-                    ofs.close();
-                    std::cout << "  -> " << commonPath.string() << std::endl;
-                }
-            }
-
-            // CubeMap pass
-            if (data.hasCubeMapPass) {
-                auto chTypes = getChannelTypes(data.cubeMapPass);
-                if (!translatePass(data.cubeMapPass.code, "cube_a.hlsl", chTypes, true)) {
-                    return 1;
-                }
-                passCount++;
-            }
-
-            // Buffer passes
-            for (size_t bi = 0; bi < data.bufferPasses.size(); ++bi) {
-                const auto& bp = data.bufferPasses[bi];
-                // 按索引生成文件名：buf_a, buf_b, buf_c, buf_d
-                std::string fname = "buf_";
-                fname += static_cast<char>('a' + bi);
-                fname += ".hlsl";
-
-                auto chTypes = getChannelTypes(bp);
-                if (!translatePass(bp.code, fname, chTypes, false)) {
-                    return 1;
-                }
-                passCount++;
-            }
-
-            // Image pass
-            {
-                auto chTypes = getChannelTypes(data.imagePass);
-                if (!translatePass(data.imagePass.code, "image.hlsl", chTypes, false)) {
-                    return 1;
-                }
-                passCount++;
-            }
-        }
-
-        std::cout << "Translation complete: " << passCount << " pass(es) written to "
-                  << outDir.string() << std::endl;
+        std::cout << "Translation complete, output: " << outDir.string() << std::endl;
         if (compileErrors > 0) {
             std::cerr << "WARNING: " << compileErrors << " pass(es) had HLSL compile errors. "
                       << "Check the .hlsl files for error details." << std::endl;
@@ -939,6 +927,24 @@ int main(int argc, char* argv[]) {
     std::cout << "Shader loaded: " << config.shaderPath
               << (projData.isMultiPass ? " (multi-pass)" : " (single-pass)") << std::endl;
 
+    // 壁纸模式：翻译输出 HLSL 到 Logs/wallpaper-runtime/ 用于调试
+    auto dumpWallpaperHlsl = [&]() {
+        if (!config.wallpaperMode) return;
+        namespace fs = std::filesystem;
+        fs::path srcPath(config.shaderPath);
+        std::string shaderName = srcPath.stem().string();
+        if (fs::is_directory(srcPath)) {
+            shaderName = srcPath.filename().string();
+        }
+        fs::path outDir = GetLogDir() / "wallpaper-runtime";
+        std::cout << "Wallpaper HLSL dump: " << config.shaderPath << std::endl;
+        int errors = TranslateAndDumpHlsl(project.GetData(), shaderName, outDir);
+        if (errors > 0) {
+            std::cerr << "WARNING: " << errors << " pass(es) had HLSL compile errors." << std::endl;
+        }
+    };
+    dumpWallpaperHlsl();
+
     // ============================================================
     // 热加载
     // ============================================================
@@ -1462,6 +1468,7 @@ int main(int argc, char* argv[]) {
                     if (SetupD3D11MultiPass(project.GetData())) {
                         lastShaderError.clear();
                         std::cout << "D3D11 Shader reloaded successfully." << std::endl;
+                        dumpWallpaperHlsl();
                         if (config.wallpaperMode) {
                             tray.SetShaderList(debugState.glslFiles, debugState.jsonFiles,
                                                debugState.dirFiles, config.shaderPath);
@@ -1478,6 +1485,7 @@ int main(int argc, char* argv[]) {
                     if (SetupMultiPass(project.GetData())) {
                         lastShaderError.clear();
                         std::cout << "Shader reloaded successfully." << std::endl;
+                        dumpWallpaperHlsl();
                         if (config.wallpaperMode) {
                             tray.SetShaderList(debugState.glslFiles, debugState.jsonFiles,
                                                debugState.dirFiles, config.shaderPath);

@@ -99,4 +99,5 @@
 - [ ] SPIRV-Cross 升级（替代文本翻译器，提高 GLSL→HLSL 翻译正确性）
 - [x] --translate 翻译模式（GLSL→HLSL 翻译输出到 Logs 目录，单 pass 输出单文件，多 pass 输出到子目录）
 - [x] --translate 翻译模式编译验证（D3DCompile ps_5_0 验证每个 pass，错误信息输出到控制台和 .hlsl 文件末尾注释）
+- [x] 壁纸模式运行时 HLSL dump（初始加载和热加载成功后自动翻译+编译验证，输出到 Logs/wallpaper-runtime/）
 - [x] WrapShaderToyHlsl 公共函数抽取（从 D3D11ShaderManager 抽取为 glsl_to_hlsl.h/cpp 自由函数，翻译模式无需 D3D11）
