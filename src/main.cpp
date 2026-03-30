@@ -294,7 +294,7 @@ static int TranslateAndDumpHlsl(const ShaderProjectData& data,
             std::cout << "  -> " << outPath.string() << "  [OK]" << std::endl;
         } else {
             std::cerr << "  -> " << outPath.string() << "  [COMPILE ERROR]" << std::endl;
-            std::cerr << compileErrorMsg << std::endl;
+            // 详细错误信息已写入 HLSL 文件末尾，控制台不再重复输出
         }
     };
 
