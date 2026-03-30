@@ -26,6 +26,7 @@
 #include "multi_pass.h"
 #include "blit_renderer.h"
 #include "shader_project.h"
+#include "glsl_to_hlsl.h"
 #include "file_watcher.h"
 #include "tray_icon.h"
 #include "debug_ui.h"
@@ -59,6 +60,7 @@ struct AppConfig {
     bool        wallpaperMode = false;
     bool        showDebug = false;   // 壁纸模式下显示只读 Debug 信息（--debug）
     bool        hotReload = true;
+    bool        translateMode = false; // 翻译模式：GLSL→HLSL 翻译后输出到 Logs 目录
     int         width  = kDefaultWidth;
     int         height = kDefaultHeight;
     int         targetFPS = -1;      // -1 表示未指定，壁纸模式默认30，窗口模式默认60
@@ -170,6 +172,7 @@ static void PrintUsage(const char* programName) {
               << "  --renderscale <f>    Render resolution scale 0.0-1.0 (wallpaper default: 0.5, window default: 1.0)\n"
               << "  --debug              Show debug overlay in wallpaper mode (default: off)\n"
               << "  --no-pause-on-fullscreen  Disable auto-pause when fullscreen app covers desktop\n"
+              << "  --translate          Translate shader (GLSL->HLSL) and save to Logs directory, then exit\n"
               << "  --help, -h           Show this help\n";
 }
 
@@ -218,6 +221,8 @@ static AppConfig ParseArgs(int argc, char* argv[]) {
             config.showDebug = true;
         } else if (arg == "--no-pause-on-fullscreen") {
             config.pauseOnFullscreen = false;
+        } else if (arg == "--translate") {
+            config.translateMode = true;
         } else if (arg == "--help" || arg == "-h") {
             PrintUsage(argv[0]);
             exit(0);
@@ -235,6 +240,137 @@ int main(int argc, char* argv[]) {
 #endif
 
     AppConfig config = ParseArgs(argc, argv);
+
+    // ============================================================
+    // 翻译模式：GLSL → HLSL 翻译后输出到 Logs 目录，然后退出
+    // 不需要初始化 SDL / OpenGL / D3D11
+    // ============================================================
+    if (config.translateMode) {
+        InitConsole();  // 确保控制台可用
+
+        ShaderProject project;
+        if (!project.Load(config.shaderPath)) {
+            std::cerr << "Failed to load shader: " << project.GetLastError() << std::endl;
+            return 1;
+        }
+        const auto& data = project.GetData();
+
+        // 从 shaderPath 提取 shader 名称（不带扩展名）
+        namespace fs = std::filesystem;
+        fs::path srcPath(config.shaderPath);
+        std::string shaderName = srcPath.stem().string();
+        // 目录模式：用目录名作为 shader 名
+        if (fs::is_directory(srcPath)) {
+            shaderName = srcPath.filename().string();
+        }
+
+        auto logDir = GetLogDir();
+        bool isMulti = data.isMultiPass || data.hasCubeMapPass || !data.commonSource.empty();
+
+        // 确定输出目录：多 pass 放子目录，单 pass 直接放 Logs
+        fs::path outDir = isMulti ? (logDir / shaderName) : logDir;
+        std::error_code ec;
+        fs::create_directories(outDir, ec);
+
+        // 从 pass 数据中推断通道类型（用于 WrapShaderToyHlsl 的纹理声明）
+        auto getChannelTypes = [](const PassData& pass) {
+            std::array<ChannelType, 4> types = {
+                ChannelType::Texture2D, ChannelType::Texture2D,
+                ChannelType::Texture2D, ChannelType::Texture2D
+            };
+            for (int i = 0; i < 4; ++i) {
+                if (pass.channels[i].source != ChannelBinding::Source::None) {
+                    types[i] = pass.channels[i].textureType;
+                }
+            }
+            return types;
+        };
+
+        // 翻译并保存一个 pass
+        auto translatePass = [&](const std::string& passCode,
+                                 const std::string& fileName,
+                                 const std::array<ChannelType, 4>& chTypes,
+                                 bool isCubeMap) -> bool {
+            std::string translated = TranslateGlslToHlsl(passCode);
+            std::string fullHlsl = WrapShaderToyHlsl(translated, chTypes,
+                                                      data.commonSource, isCubeMap);
+            fs::path outPath = outDir / fileName;
+            std::ofstream ofs(outPath, std::ios::out | std::ios::trunc);
+            if (!ofs.is_open()) {
+                std::cerr << "Failed to write: " << outPath.string() << std::endl;
+                return false;
+            }
+            ofs << fullHlsl;
+            ofs.close();
+            std::cout << "  -> " << outPath.string() << std::endl;
+            return true;
+        };
+
+        std::cout << "Translating GLSL -> HLSL: " << config.shaderPath << std::endl;
+
+        int passCount = 0;
+
+        if (!isMulti) {
+            // 单 pass：直接输出 <shader_name>.hlsl
+            auto chTypes = getChannelTypes(data.imagePass);
+            if (!translatePass(data.imagePass.code, shaderName + ".hlsl", chTypes, false)) {
+                return 1;
+            }
+            passCount = 1;
+        } else {
+            // 多 pass：每个 pass 各一个文件，放在 Logs/<shader_name>/ 子目录
+
+            // Common 段单独保存（原始 GLSL + 翻译后的 HLSL）
+            if (!data.commonSource.empty()) {
+                // 保存翻译后的 common（仅代码段，不含 cbuffer/main）
+                std::string commonHlsl = TranslateGlslToHlsl(data.commonSource);
+                fs::path commonPath = outDir / "common.hlsl";
+                std::ofstream ofs(commonPath, std::ios::out | std::ios::trunc);
+                if (ofs.is_open()) {
+                    ofs << "// Common code (translated from GLSL)\n" << commonHlsl;
+                    ofs.close();
+                    std::cout << "  -> " << commonPath.string() << std::endl;
+                }
+            }
+
+            // CubeMap pass
+            if (data.hasCubeMapPass) {
+                auto chTypes = getChannelTypes(data.cubeMapPass);
+                if (!translatePass(data.cubeMapPass.code, "cube_a.hlsl", chTypes, true)) {
+                    return 1;
+                }
+                passCount++;
+            }
+
+            // Buffer passes
+            for (size_t bi = 0; bi < data.bufferPasses.size(); ++bi) {
+                const auto& bp = data.bufferPasses[bi];
+                // 按索引生成文件名：buf_a, buf_b, buf_c, buf_d
+                std::string fname = "buf_";
+                fname += static_cast<char>('a' + bi);
+                fname += ".hlsl";
+
+                auto chTypes = getChannelTypes(bp);
+                if (!translatePass(bp.code, fname, chTypes, false)) {
+                    return 1;
+                }
+                passCount++;
+            }
+
+            // Image pass
+            {
+                auto chTypes = getChannelTypes(data.imagePass);
+                if (!translatePass(data.imagePass.code, "image.hlsl", chTypes, false)) {
+                    return 1;
+                }
+                passCount++;
+            }
+        }
+
+        std::cout << "Translation complete: " << passCount << " pass(es) written to "
+                  << outDir.string() << std::endl;
+        return 0;
+    }
 
     // 根据模式初始化日志文件（wallpaper.log / window.log）
     InitLogFile(config.wallpaperMode);

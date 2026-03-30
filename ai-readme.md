@@ -97,3 +97,5 @@
 - [ ] 实机测试（Win11 24H2 壁纸模式验证）
 - [ ] 壁纸模式 DebugUI（ImGui D3D11 后端适配）
 - [ ] SPIRV-Cross 升级（替代文本翻译器，提高 GLSL→HLSL 翻译正确性）
+- [x] --translate 翻译模式（GLSL→HLSL 翻译输出到 Logs 目录，单 pass 输出单文件，多 pass 输出到子目录）
+- [x] WrapShaderToyHlsl 公共函数抽取（从 D3D11ShaderManager 抽取为 glsl_to_hlsl.h/cpp 自由函数，翻译模式无需 D3D11）
