@@ -326,3 +326,56 @@ float4 main(PSInput input) : SV_Target {
 
     return hlsl.str();
 }
+
+#ifdef _WIN32
+#include <d3dcompiler.h>
+
+bool CompileHlslForValidation(const std::string& hlslSource,
+                              const std::string& sourceName,
+                              std::string& outErrors) {
+    outErrors.clear();
+
+    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL0;
+
+    ID3D10Blob* shaderBlob = nullptr;
+    ID3D10Blob* errorBlob = nullptr;
+
+    HRESULT hr = D3DCompile(
+        hlslSource.c_str(),
+        hlslSource.size(),
+        sourceName.c_str(),
+        nullptr,    // defines
+        nullptr,    // includes
+        "main",
+        "ps_5_0",
+        compileFlags,
+        0,
+        &shaderBlob,
+        &errorBlob
+    );
+
+    bool success = SUCCEEDED(hr);
+
+    if (errorBlob) {
+        outErrors = static_cast<const char*>(errorBlob->GetBufferPointer());
+        // 去除尾部空白
+        while (!outErrors.empty() && (outErrors.back() == '\n' || outErrors.back() == '\r' || outErrors.back() == ' ')) {
+            outErrors.pop_back();
+        }
+        errorBlob->Release();
+    }
+
+    if (shaderBlob) {
+        shaderBlob->Release();
+    }
+
+    return success;
+}
+#else
+bool CompileHlslForValidation(const std::string& /*hlslSource*/,
+                              const std::string& /*sourceName*/,
+                              std::string& outErrors) {
+    outErrors = "HLSL compilation validation is only available on Windows.";
+    return false;
+}
+#endif

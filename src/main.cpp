@@ -286,7 +286,9 @@ int main(int argc, char* argv[]) {
             return types;
         };
 
-        // 翻译并保存一个 pass
+        int compileErrors = 0;  // 编译失败计数
+
+        // 翻译并保存一个 pass，然后编译验证
         auto translatePass = [&](const std::string& passCode,
                                  const std::string& fileName,
                                  const std::array<ChannelType, 4>& chTypes,
@@ -294,6 +296,19 @@ int main(int argc, char* argv[]) {
             std::string translated = TranslateGlslToHlsl(passCode);
             std::string fullHlsl = WrapShaderToyHlsl(translated, chTypes,
                                                       data.commonSource, isCubeMap);
+
+            // 编译验证
+            std::string compileErrorMsg;
+            bool compileOk = CompileHlslForValidation(fullHlsl, fileName, compileErrorMsg);
+
+            // 如果编译失败，在 HLSL 源码末尾追加错误信息注释
+            if (!compileOk) {
+                fullHlsl += "\n\n/*\n=== HLSL Compile Errors ===\n";
+                fullHlsl += compileErrorMsg;
+                fullHlsl += "\n=== End Compile Errors ===\n*/\n";
+                compileErrors++;
+            }
+
             fs::path outPath = outDir / fileName;
             std::ofstream ofs(outPath, std::ios::out | std::ios::trunc);
             if (!ofs.is_open()) {
@@ -302,7 +317,13 @@ int main(int argc, char* argv[]) {
             }
             ofs << fullHlsl;
             ofs.close();
-            std::cout << "  -> " << outPath.string() << std::endl;
+
+            if (compileOk) {
+                std::cout << "  -> " << outPath.string() << "  [OK]" << std::endl;
+            } else {
+                std::cerr << "  -> " << outPath.string() << "  [COMPILE ERROR]" << std::endl;
+                std::cerr << compileErrorMsg << std::endl;
+            }
             return true;
         };
 
@@ -369,6 +390,10 @@ int main(int argc, char* argv[]) {
 
         std::cout << "Translation complete: " << passCount << " pass(es) written to "
                   << outDir.string() << std::endl;
+        if (compileErrors > 0) {
+            std::cerr << "WARNING: " << compileErrors << " pass(es) had HLSL compile errors. "
+                      << "Check the .hlsl files for error details." << std::endl;
+        }
         return 0;
     }
 

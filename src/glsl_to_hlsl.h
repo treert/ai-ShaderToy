@@ -30,3 +30,15 @@ std::string WrapShaderToyHlsl(const std::string& translatedHlsl,
                               const std::array<ChannelType, 4>& channelTypes,
                               const std::string& commonSource = "",
                               bool isCubeMapPass = false);
+
+/// 编译 HLSL 源码进行验证（不创建 GPU 资源，仅检查语法和语义错误）。
+/// 使用 D3DCompile (ps_5_0) 进行编译。
+/// 仅在 Windows 平台可用。
+///
+/// @param hlslSource  完整的 HLSL Pixel Shader 源码
+/// @param sourceName  用于错误信息的源文件名（可选）
+/// @param outErrors   编译错误信息输出（为空表示编译成功）
+/// @return true 表示编译成功，false 表示有编译错误
+bool CompileHlslForValidation(const std::string& hlslSource,
+                              const std::string& sourceName,
+                              std::string& outErrors);
