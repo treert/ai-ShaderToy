@@ -82,3 +82,18 @@
 - [x] BlitRenderer uniform 缓存（uTex location Init 时一次性缓存）
 - [x] MultiPassRenderer 渲染流程拆分（RenderBufferPasses + RenderImagePass）
 - [x] Vulkan 迁移评估（结论：暂不迁移，ShaderToy 场景 GPU 瓶颈在 fragment shader 而非 API 开销）
+
+### 阶段 6：D3D11 壁纸后端 🔄 进行中
+**目标**：解决 Win11 24H2+ (Build 26200+) 壁纸模式黑屏问题（Progman 使用 WS_EX_NOREDIRECTIONBITMAP，OpenGL swap chain 不可见）
+- [x] D3D11Renderer（Device/Context/多 SwapChain 管理，全屏三角形 VS）
+- [x] GLSL-to-HLSL 翻译器（基于正则替换，后续可升级为 glslang + SPIRV-Cross）
+- [x] D3D11ShaderManager（HLSL 模板 + D3DCompile + ConstantBuffer + SRV 绑定）
+- [x] D3D11TextureManager（stb_image + Texture2D/CubeMap SRV）
+- [x] D3D11MultiPass（多 Pass RTV + 双缓冲 + CubeMap 6 面渲染）
+- [x] D3D11BlitRenderer（降分辨率 RTV + blit PS）
+- [x] main.cpp 集成（壁纸模式使用 D3D11 路径，窗口模式保留 OpenGL）
+- [x] CMakeLists.txt 更新（d3d11/dxgi/d3dcompiler 链接）
+- [x] Debug 代码清理（移除红色 glClear 测试、drawable 日志）
+- [ ] 实机测试（Win11 24H2 壁纸模式验证）
+- [ ] 壁纸模式 DebugUI（ImGui D3D11 后端适配）
+- [ ] SPIRV-Cross 升级（替代文本翻译器，提高 GLSL→HLSL 翻译正确性）

@@ -1,4 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
+# 兼容第三方库（glad/SDL2）旧版 cmake_minimum_required
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
 project(ShaderToyDesktop VERSION 0.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -99,6 +101,12 @@ set(SOURCES
     src/debug_ui.cpp
     src/shader_project.cpp
     src/file_dialog.cpp
+    src/glsl_to_hlsl.cpp
+    src/d3d11_renderer.cpp
+    src/d3d11_shader_manager.cpp
+    src/d3d11_texture_manager.cpp
+    src/d3d11_multi_pass.cpp
+    src/d3d11_blit_renderer.cpp
     src/app.rc
     ${IMGUI_SOURCES}
 )
@@ -116,6 +124,12 @@ set(HEADERS
     src/shader_project.h
     src/file_dialog.h
     src/stb_image.h
+    src/glsl_to_hlsl.h
+    src/d3d11_renderer.h
+    src/d3d11_shader_manager.h
+    src/d3d11_texture_manager.h
+    src/d3d11_multi_pass.h
+    src/d3d11_blit_renderer.h
 )
 
 add_executable(${PROJECT_NAME} WIN32 ${SOURCES} ${HEADERS})
@@ -136,6 +150,9 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     ole32
     shell32
     uuid
+    d3d11
+    dxgi
+    d3dcompiler
 )
 
 # MSVC: 禁用 C4005（APIENTRY 宏重定义，GLAD 与 Windows SDK 冲突）

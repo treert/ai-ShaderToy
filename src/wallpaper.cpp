@@ -24,9 +24,28 @@ HWND Wallpaper::FindWorkerW() {
     LRESULT result = 0;
     SendMessageTimeoutW(progman, 0x052C, 0, 0, SMTO_NORMAL, 1000,
                         reinterpret_cast<PDWORD_PTR>(&result));
+
+    // Classic method: find top-level WorkerW (Windows 8 ~ Win11 23H2)
     HWND workerW = nullptr;
     EnumWindows(EnumWindowsProc, reinterpret_cast<LPARAM>(&workerW));
-    return workerW;
+    if (workerW) {
+        std::cout << "WorkerW found via classic method." << std::endl;
+        return workerW;
+    }
+
+    // Win11 24H2+ fallback: WorkerW is now a child of Progman
+    // Layout: Progman -> SHELLDLL_DefView + WorkerW (sibling)
+    HWND shellView = FindWindowExW(progman, nullptr, L"SHELLDLL_DefView", nullptr);
+    if (shellView) {
+        workerW = FindWindowExW(progman, nullptr, L"WorkerW", nullptr);
+        if (workerW) {
+            std::cout << "WorkerW found as Progman child (Win11 24H2+ fallback)." << std::endl;
+            return workerW;
+        }
+    }
+
+    std::cerr << "Failed to find WorkerW." << std::endl;
+    return nullptr;
 }
 
 HWND Wallpaper::GetWorkerW() {
@@ -85,14 +104,40 @@ bool Wallpaper::EmbedAsWallpaper(SDL_Window* window, const MonitorInfo& monitor)
     // 设置为 WorkerW 的子窗口
     SetParent(hwnd, workerW_);
 
-    // WorkerW 的客户区坐标系与虚拟桌面一致
-    // 直接用显示器的屏幕坐标定位
+    // Win11 24H2+: WorkerW 需要 WS_CLIPCHILDREN 让 DWM 显示子窗口区域
+    HWND workerParent = GetParent(workerW_);
+    if (workerParent) {
+        LONG workerStyle = GetWindowLong(workerW_, GWL_STYLE);
+        if (!(workerStyle & WS_CLIPCHILDREN)) {
+            SetWindowLong(workerW_, GWL_STYLE, workerStyle | WS_CLIPCHILDREN);
+        }
+    }
+
+    // 定位窗口：直接使用物理像素坐标
+    // SDL_GL_GetDrawableSize 返回的是像素尺寸，GL viewport 基于此
     SetWindowPos(hwnd, nullptr, monitor.x, monitor.y,
                  monitor.width, monitor.height,
                  SWP_NOZORDER | SWP_SHOWWINDOW);
 
+    // 打印嵌入后窗口的实际尺寸（调试用）
+    RECT actualRect;
+    GetWindowRect(hwnd, &actualRect);
     std::cout << "Embedded on monitor (" << monitor.x << "," << monitor.y << ") "
-              << monitor.width << "x" << monitor.height << std::endl;
+              << monitor.width << "x" << monitor.height
+              << " actual=(" << actualRect.left << "," << actualRect.top << ") "
+              << (actualRect.right - actualRect.left) << "x"
+              << (actualRect.bottom - actualRect.top) << std::endl;
+
+    // Win11 24H2+: 刷新 SHELLDLL_DefView 清除快照层
+    HWND parent = GetParent(workerW_);
+    if (parent) {
+        HWND shellView = FindWindowExW(parent, nullptr, L"SHELLDLL_DefView", nullptr);
+        if (shellView) {
+            ShowWindow(shellView, SW_HIDE);
+            Sleep(0);
+            ShowWindow(shellView, SW_SHOWNORMAL);
+        }
+    }
     return true;
 }
 

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <memory>
+#include <fstream>
 #include <filesystem>
 
 #include <glad/glad.h>
@@ -29,6 +30,15 @@
 #include "tray_icon.h"
 #include "debug_ui.h"
 #include "file_dialog.h"
+
+#ifdef _WIN32
+#include "d3d11_renderer.h"
+#include "d3d11_shader_manager.h"
+#include "d3d11_texture_manager.h"
+#include "d3d11_multi_pass.h"
+#include "d3d11_blit_renderer.h"
+#include <SDL_syswm.h>
+#endif
 
 // 默认参数
 static const int    kDefaultWidth  = 800;
@@ -57,20 +67,89 @@ struct AppConfig {
     bool        pauseOnFullscreen = true; // 壁纸模式：全屏应用遮挡时暂停渲染
 };
 
-/// 确保有控制台可以输出（WIN32 子系统默认没有控制台）
-static void EnsureConsole() {
-#ifdef _WIN32
-    if (!AttachConsole(ATTACH_PARENT_PROCESS)) {
-        AllocConsole();
+/// Tee streambuf: 同时输出到文件和（可选的）控制台
+class TeeStreambuf : public std::streambuf {
+public:
+    TeeStreambuf(std::streambuf* fileBuf, std::streambuf* consoleBuf)
+        : fileBuf_(fileBuf), consoleBuf_(consoleBuf) {}
+
+protected:
+    int overflow(int c) override {
+        if (c == EOF) return c;
+        bool ok = true;
+        if (fileBuf_ && fileBuf_->sputc(static_cast<char>(c)) == EOF) ok = false;
+        if (consoleBuf_ && consoleBuf_->sputc(static_cast<char>(c)) == EOF) ok = false;
+        return ok ? c : EOF;
     }
-    FILE* fp = nullptr;
-    freopen_s(&fp, "CONOUT$", "w", stdout);
-    freopen_s(&fp, "CONOUT$", "w", stderr);
+
+    std::streamsize xsputn(const char* s, std::streamsize n) override {
+        std::streamsize written = n;
+        if (fileBuf_) fileBuf_->sputn(s, n);
+        if (consoleBuf_) consoleBuf_->sputn(s, n);
+        return written;
+    }
+
+    int sync() override {
+        int r = 0;
+        if (fileBuf_ && fileBuf_->pubsync() != 0) r = -1;
+        if (consoleBuf_ && consoleBuf_->pubsync() != 0) r = -1;
+        return r;
+    }
+
+private:
+    std::streambuf* fileBuf_;
+    std::streambuf* consoleBuf_;
+};
+
+// 全局日志资源（生命周期与进程一致）
+static std::ofstream g_logFile;
+static std::unique_ptr<TeeStreambuf> g_coutTee;
+static std::unique_ptr<TeeStreambuf> g_cerrTee;
+static bool g_hasConsole = false;
+
+/// 获取 exe 所在目录下的 Logs 子目录路径，不存在则创建
+static std::filesystem::path GetLogDir() {
+    wchar_t exePath[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    auto dir = std::filesystem::path(exePath).parent_path() / "Logs";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    return dir;
+}
+
+/// 第一步：附加控制台（解析参数前调用，让 --help 等能输出到终端）
+static void InitConsole() {
+#ifdef _WIN32
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+        FILE* fp = nullptr;
+        freopen_s(&fp, "CONOUT$", "w", stdout);
+        freopen_s(&fp, "CONOUT$", "w", stderr);
+        g_hasConsole = true;
+    }
+#endif
+}
+
+/// 第二步：初始化日志文件（解析参数后调用，根据模式选择文件名）
+/// wallpaper 模式 → wallpaper.log，窗口模式 → window.log
+static void InitLogFile(bool wallpaperMode) {
+#ifdef _WIN32
+    auto logName = wallpaperMode ? "shadertoy_log_wallpaper.log" : "shadertoy_log_window.log";
+    auto logPath = GetLogDir() / logName;
+    g_logFile.open(logPath, std::ios::out | std::ios::trunc);
+
+    std::streambuf* consoleBuf = g_hasConsole ? std::cout.rdbuf() : nullptr;
+
+    if (g_logFile.is_open()) {
+        g_coutTee = std::make_unique<TeeStreambuf>(g_logFile.rdbuf(), consoleBuf);
+        g_cerrTee = std::make_unique<TeeStreambuf>(g_logFile.rdbuf(), consoleBuf);
+        std::cout.rdbuf(g_coutTee.get());
+        std::cerr.rdbuf(g_cerrTee.get());
+    }
 #endif
 }
 
 static void PrintUsage(const char* programName) {
-    EnsureConsole();
+    InitConsole();
     std::cout << "Usage: " << programName << " [options]\n"
               << "Options:\n"
               << "  --shader <path>      Path to ShaderToy GLSL file (default: " << kDefaultShader << ")\n"
@@ -148,12 +227,17 @@ static AppConfig ParseArgs(int argc, char* argv[]) {
 }
 
 int main(int argc, char* argv[]) {
+    InitConsole();  // 先附加控制台（让 --help 能输出）
+
     // 声明 DPI 感知，确保多显示器不同 DPI 时获取正确的物理像素尺寸
 #ifdef _WIN32
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 #endif
 
     AppConfig config = ParseArgs(argc, argv);
+
+    // 根据模式初始化日志文件（wallpaper.log / window.log）
+    InitLogFile(config.wallpaperMode);
 
     // ============================================================
     // 初始化 SDL
@@ -177,11 +261,21 @@ int main(int argc, char* argv[]) {
         int x = 0, y = 0;          // 显示器屏幕坐标
         int width = 0, height = 0;
         bool occluded = false;      // 是否被窗口遮挡（遮挡时跳过渲染）
-        std::unique_ptr<BlitRenderer> blit; // 每个显示器独立的 BlitRenderer（不同分辨率各自持有 FBO）
+        std::unique_ptr<BlitRenderer> blit; // 每个显示器独立的 BlitRenderer（不同分辨率各自持有 FBO）— 窗口模式 OpenGL 用
+        int d3dSwapChainIndex = -1; // D3D11 SwapChain 索引（壁纸模式用）
+        std::unique_ptr<D3D11BlitRenderer> d3dBlit; // D3D11 降分辨率渲染器
     };
     std::vector<WallpaperWindow> wallpaperWindows;
     SDL_Window* window = nullptr;       // 主窗口（窗口模式用，壁纸模式指向第一个）
     SDL_GLContext glContext = nullptr;
+
+    // D3D11 壁纸模式渲染资源
+#ifdef _WIN32
+    std::unique_ptr<D3D11Renderer> d3dRenderer;
+    std::unique_ptr<D3D11MultiPass> d3dMultiPass;
+    std::unique_ptr<D3D11TextureManager> d3dTextures;
+    bool useD3D11 = false;  // 壁纸模式使用 D3D11
+#endif
 
     if (config.wallpaperMode) {
         auto monitors = Wallpaper::EnumMonitors();
@@ -191,9 +285,6 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        // 允许共享 GL 上下文
-        SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
-
         // --monitor 参数校验
         if (config.monitorIndex >= static_cast<int>(monitors.size())) {
             std::cerr << "Monitor index " << config.monitorIndex
@@ -201,69 +292,84 @@ int main(int argc, char* argv[]) {
             config.monitorIndex = -1;
         }
 
-        for (size_t i = 0; i < monitors.size(); ++i) {
-            // 如果指定了显示器索引，跳过其他显示器
-            if (config.monitorIndex >= 0 && static_cast<int>(i) != config.monitorIndex) {
-                continue;
-            }
-            const auto& mon = monitors[i];
-            Uint32 flags = SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_BORDERLESS;
-
-            SDL_Window* win = SDL_CreateWindow(
-                kWindowTitle, mon.x, mon.y, mon.width, mon.height, flags);
-            if (!win) {
-                std::cerr << "Failed to create window for monitor " << i << ": "
-                          << SDL_GetError() << std::endl;
-                continue;
-            }
-
-            // 第一个成功创建的窗口创建 GL 上下文
-            if (wallpaperWindows.empty() && !glContext) {
-                glContext = SDL_GL_CreateContext(win);
-                if (!glContext) {
-                    std::cerr << "SDL_GL_CreateContext failed: " << SDL_GetError() << std::endl;
-                    SDL_DestroyWindow(win);
-                    SDL_Quit();
-                    return 1;
-                }
-                if (!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress)) {
-                    std::cerr << "gladLoadGLLoader failed." << std::endl;
-                    SDL_GL_DeleteContext(glContext);
-                    SDL_DestroyWindow(win);
-                    SDL_Quit();
-                    return 1;
-                }
-            }
-
-            // 嵌入到桌面壁纸层
-            if (!Wallpaper::EmbedAsWallpaper(win, mon)) {
-                std::cerr << "Failed to embed monitor " << i << std::endl;
-                SDL_DestroyWindow(win);
-                continue;
-            }
-
-            WallpaperWindow ww;
-            ww.window = win;
-            ww.x = mon.x;
-            ww.y = mon.y;
-            ww.width = mon.width;
-            ww.height = mon.height;
-            wallpaperWindows.push_back(std::move(ww));
-        }
-
-        if (wallpaperWindows.empty()) {
-            std::cerr << "Failed to embed any monitor, falling back to window mode." << std::endl;
+#ifdef _WIN32
+        // 壁纸模式使用 D3D11：不创建 OpenGL 窗口
+        d3dRenderer = std::make_unique<D3D11Renderer>();
+        if (!d3dRenderer->Init()) {
+            std::cerr << "D3D11 init failed: " << d3dRenderer->GetLastError()
+                      << ", falling back to window mode." << std::endl;
+            d3dRenderer.reset();
             config.wallpaperMode = false;
-        } else {
-            window = wallpaperWindows[0].window;
-            // 取所有显示器的最大宽高，用于 FBO 预分配（避免多显示器不同分辨率时反复重建）
-            int maxW = 0, maxH = 0;
-            for (const auto& ww : wallpaperWindows) {
-                if (ww.width > maxW) maxW = ww.width;
-                if (ww.height > maxH) maxH = ww.height;
+        }
+#endif
+
+        if (config.wallpaperMode) {
+            for (size_t i = 0; i < monitors.size(); ++i) {
+                if (config.monitorIndex >= 0 && static_cast<int>(i) != config.monitorIndex) {
+                    continue;
+                }
+                const auto& mon = monitors[i];
+                // 不使用 SDL_WINDOW_OPENGL — D3D11 通过 HWND 创建 SwapChain
+                Uint32 flags = SDL_WINDOW_SHOWN | SDL_WINDOW_BORDERLESS;
+
+                SDL_Window* win = SDL_CreateWindow(
+                    kWindowTitle, mon.x, mon.y, mon.width, mon.height, flags);
+                if (!win) {
+                    std::cerr << "Failed to create window for monitor " << i << ": "
+                              << SDL_GetError() << std::endl;
+                    continue;
+                }
+
+                // 嵌入到桌面壁纸层
+                if (!Wallpaper::EmbedAsWallpaper(win, mon)) {
+                    std::cerr << "Failed to embed monitor " << i << std::endl;
+                    SDL_DestroyWindow(win);
+                    continue;
+                }
+
+#ifdef _WIN32
+                // 获取 HWND 并创建 D3D11 SwapChain
+                SDL_SysWMinfo wmInfo;
+                SDL_VERSION(&wmInfo.version);
+                int scIdx = -1;
+                if (SDL_GetWindowWMInfo(win, &wmInfo)) {
+                    scIdx = d3dRenderer->AddSwapChain(wmInfo.info.win.window, mon.width, mon.height);
+                }
+                if (scIdx < 0) {
+                    std::cerr << "Failed to create D3D11 SwapChain for monitor " << i << std::endl;
+                    SDL_DestroyWindow(win);
+                    continue;
+                }
+#endif
+
+                WallpaperWindow ww;
+                ww.window = win;
+                ww.x = mon.x;
+                ww.y = mon.y;
+                ww.width = mon.width;
+                ww.height = mon.height;
+#ifdef _WIN32
+                ww.d3dSwapChainIndex = scIdx;
+#endif
+                wallpaperWindows.push_back(std::move(ww));
             }
-            config.width = maxW;
-            config.height = maxH;
+
+            if (wallpaperWindows.empty()) {
+                std::cerr << "Failed to embed any monitor, falling back to window mode." << std::endl;
+                config.wallpaperMode = false;
+            } else {
+                window = wallpaperWindows[0].window;
+                int maxW = 0, maxH = 0;
+                for (const auto& ww : wallpaperWindows) {
+                    if (ww.width > maxW) maxW = ww.width;
+                    if (ww.height > maxH) maxH = ww.height;
+                }
+                config.width = maxW;
+                config.height = maxH;
+#ifdef _WIN32
+                useD3D11 = true;
+#endif
+            }
         }
     }
 
@@ -297,8 +403,10 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    std::cout << "OpenGL " << glGetString(GL_VERSION) << std::endl;
-    std::cout << "Renderer: " << glGetString(GL_RENDERER) << std::endl;
+    if (glContext) {
+        std::cout << "OpenGL " << glGetString(GL_VERSION) << std::endl;
+        std::cout << "Renderer: " << glGetString(GL_RENDERER) << std::endl;
+    }
 
     // 应用模式相关的默认值
     if (config.targetFPS < 0) {
@@ -308,63 +416,79 @@ int main(int argc, char* argv[]) {
         config.renderScale = config.wallpaperMode ? 0.5f : 1.0f;
     }
 
-    // VSync 策略：关闭 VSync，纯靠 SDL_Delay 精确控帧
-    // （VSync 在 WorkerW 嵌入窗口和部分驱动下行为不可靠）
-    SDL_GL_SetSwapInterval(0);
+    if (glContext) {
+        // VSync 策略：关闭 VSync，纯靠 SDL_Delay 精确控帧
+        SDL_GL_SetSwapInterval(0);
+    }
 
     std::cout << "Target FPS: " << config.targetFPS
               << ", Render scale: " << config.renderScale << std::endl;
 
     // ============================================================
-    // 降分辨率渲染（renderScale < 1.0 时启用）
+    // D3D11 壁纸模式：初始化渲染资源
+    // ============================================================
+#ifdef _WIN32
+    if (useD3D11 && d3dRenderer) {
+        bool useScaledD3D = (config.renderScale < 1.0f);
+        if (useScaledD3D) {
+            for (auto& ww : wallpaperWindows) {
+                ww.d3dBlit = std::make_unique<D3D11BlitRenderer>();
+                if (!ww.d3dBlit->Init(d3dRenderer->GetDevice(), d3dRenderer->GetContext())) {
+                    std::cerr << "D3D11BlitRenderer init failed." << std::endl;
+                    useScaledD3D = false;
+                    break;
+                }
+                ww.d3dBlit->CreateRenderTarget(ww.width, ww.height, config.renderScale);
+                std::cout << "D3D11 Monitor (" << ww.x << "," << ww.y << ") scaled: "
+                          << ww.d3dBlit->GetRenderWidth() << "x" << ww.d3dBlit->GetRenderHeight() << std::endl;
+            }
+            if (!useScaledD3D) {
+                for (auto& ww : wallpaperWindows) ww.d3dBlit.reset();
+            }
+        }
+
+        d3dMultiPass = std::make_unique<D3D11MultiPass>();
+        d3dMultiPass->SetDevice(d3dRenderer->GetDevice(), d3dRenderer->GetContext());
+        d3dMultiPass->Init(config.width, config.height);
+
+        d3dTextures = std::make_unique<D3D11TextureManager>();
+        d3dTextures->SetDevice(d3dRenderer->GetDevice(), d3dRenderer->GetContext());
+    }
+#endif
+
+    // ============================================================
+    // OpenGL 降分辨率渲染（renderScale < 1.0 时启用）
     // ============================================================
     BlitRenderer blitRenderer;  // 窗口模式使用
     bool useScaledRender = (config.renderScale < 1.0f);
 
-    if (useScaledRender) {
-        if (config.wallpaperMode && !wallpaperWindows.empty()) {
-            // 壁纸模式：每个显示器创建独立的 BlitRenderer
-            for (auto& ww : wallpaperWindows) {
-                ww.blit = std::make_unique<BlitRenderer>();
-                if (!ww.blit->Init()) {
-                    std::cerr << "BlitRenderer init failed for monitor (" << ww.x << "," << ww.y << ")" << std::endl;
-                    useScaledRender = false;
-                    break;
-                }
-                ww.blit->CreateRenderFBO(ww.width, ww.height, config.renderScale);
-                std::cout << "Monitor (" << ww.x << "," << ww.y << ") scaled rendering: "
-                          << ww.blit->GetRenderWidth() << "x" << ww.blit->GetRenderHeight()
-                          << " (scale=" << config.renderScale << ")" << std::endl;
-            }
-            if (!useScaledRender) {
-                for (auto& ww : wallpaperWindows) ww.blit.reset();
-            }
+    if (useScaledRender && !useD3D11) {
+        // 窗口模式：使用全局 blitRenderer
+        if (!blitRenderer.Init()) {
+            std::cerr << "BlitRenderer init failed, disabling scaled rendering." << std::endl;
+            useScaledRender = false;
         } else {
-            // 窗口模式：使用全局 blitRenderer
-            if (!blitRenderer.Init()) {
-                std::cerr << "BlitRenderer init failed, disabling scaled rendering." << std::endl;
-                useScaledRender = false;
-            } else {
-                blitRenderer.CreateRenderFBO(config.width, config.height, config.renderScale);
-                std::cout << "Scaled rendering: " << blitRenderer.GetRenderWidth() << "x"
-                          << blitRenderer.GetRenderHeight()
-                          << " (scale=" << config.renderScale << ")" << std::endl;
-            }
+            blitRenderer.CreateRenderFBO(config.width, config.height, config.renderScale);
+            std::cout << "Scaled rendering: " << blitRenderer.GetRenderWidth() << "x"
+                      << blitRenderer.GetRenderHeight()
+                      << " (scale=" << config.renderScale << ")" << std::endl;
         }
     }
 
     // ============================================================
-    // 初始化渲染器（全屏四边形 VAO，供 MultiPassRenderer 使用）
+    // 初始化 OpenGL 渲染器（全屏四边形 VAO）— 仅窗口模式
     // ============================================================
     Renderer renderer;
-    if (!renderer.Init()) {
-        std::cerr << "Renderer init failed." << std::endl;
-        SDL_GL_DeleteContext(glContext);
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return 1;
+    if (glContext) {
+        if (!renderer.Init()) {
+            std::cerr << "Renderer init failed." << std::endl;
+            SDL_GL_DeleteContext(glContext);
+            SDL_DestroyWindow(window);
+            SDL_Quit();
+            return 1;
+        }
+        renderer.SetViewport(config.width, config.height);
     }
-    renderer.SetViewport(config.width, config.height);
 
     // ============================================================
     // 加载 Shader 项目（支持单文件 .glsl / JSON / 目录三种模式）
@@ -529,13 +653,123 @@ int main(int argc, char* argv[]) {
         return true;
     };
 
-    if (!SetupMultiPass(projData)) {
-        std::cerr << "Failed to setup multi-pass renderer: " << multiPass.GetLastError() << std::endl;
-        SDL_GL_DeleteContext(glContext);
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return 1;
+    if (!useD3D11) {
+        if (!SetupMultiPass(projData)) {
+            std::cerr << "Failed to setup multi-pass renderer: " << multiPass.GetLastError() << std::endl;
+            if (glContext) SDL_GL_DeleteContext(glContext);
+            SDL_DestroyWindow(window);
+            SDL_Quit();
+            return 1;
+        }
     }
+
+    // D3D11 壁纸模式：配置 D3D11MultiPass
+#ifdef _WIN32
+    auto SetupD3D11MultiPass = [&](const ShaderProjectData& data) -> bool {
+        if (!d3dMultiPass) return false;
+        d3dMultiPass->Clear();
+        d3dMultiPass->Init(config.width, config.height);
+        d3dMultiPass->SetCommonSource(data.commonSource);
+
+        // resolveChannels 与 OpenGL 版本相同
+        auto resolveChannels = [](const PassData& pass,
+                                  std::array<int, 4>& inputs,
+                                  std::array<ChannelType, 4>& chTypes) {
+            inputs = {-1, -1, -1, -1};
+            chTypes = { ChannelType::Texture2D, ChannelType::Texture2D,
+                        ChannelType::Texture2D, ChannelType::Texture2D };
+            for (int i = 0; i < 4; ++i) {
+                const auto& ch = pass.channels[i];
+                if (ch.source == ChannelBinding::Source::Buffer) {
+                    inputs[i] = ch.bufferIndex;
+                } else if (ch.source == ChannelBinding::Source::ExternalTexture) {
+                    inputs[i] = 100 + i;
+                    chTypes[i] = ch.textureType;
+                } else if (ch.source == ChannelBinding::Source::CubeMapPass) {
+                    inputs[i] = 200;
+                    chTypes[i] = ChannelType::CubeMap;
+                }
+            }
+        };
+
+        // 设置外部纹理 SRV
+        if (d3dTextures) {
+            for (int i = 0; i < 4; ++i) {
+                if (d3dTextures->HasTexture(i)) {
+                    float tw, th;
+                    d3dTextures->GetResolution(i, tw, th);
+                    d3dMultiPass->SetExternalTexture(i, d3dTextures->GetSRV(i),
+                                                      static_cast<int>(tw), static_cast<int>(th),
+                                                      d3dTextures->GetChannelType(i));
+                }
+            }
+        }
+
+        if (data.hasCubeMapPass) {
+            std::array<int, 4> inputs; std::array<ChannelType, 4> chTypes;
+            resolveChannels(data.cubeMapPass, inputs, chTypes);
+            if (!d3dMultiPass->SetCubeMapPass(data.cubeMapPass.code, inputs, chTypes)) return false;
+        }
+        for (const auto& bp : data.bufferPasses) {
+            std::array<int, 4> inputs; std::array<ChannelType, 4> chTypes;
+            resolveChannels(bp, inputs, chTypes);
+            if (d3dMultiPass->AddBufferPass(bp.name, bp.code, inputs, chTypes) < 0) return false;
+        }
+        {
+            std::array<int, 4> inputs; std::array<ChannelType, 4> chTypes;
+            resolveChannels(data.imagePass, inputs, chTypes);
+            if (!d3dMultiPass->SetImagePass(data.imagePass.code, inputs, chTypes)) return false;
+        }
+        return true;
+    };
+
+    if (useD3D11) {
+        // D3D11 纹理加载
+        if (d3dTextures) {
+            const auto& data = projData;
+            bool hasChannelBindings = false;
+            for (int i = 0; i < 4; ++i) {
+                if (data.imagePass.channels[i].source != ChannelBinding::Source::None) {
+                    hasChannelBindings = true; break;
+                }
+            }
+            if (!hasChannelBindings && !data.isMultiPass && data.commonSource.empty()) {
+                std::string channelPaths[4] = {config.channel0, config.channel1, config.channel2, config.channel3};
+                for (int i = 0; i < 4; ++i) {
+                    if (channelPaths[i].empty()) continue;
+                    if (config.channelTypes[i] == ChannelType::CubeMap)
+                        d3dTextures->LoadCubeMap(i, channelPaths[i]);
+                    else
+                        d3dTextures->LoadTexture(i, channelPaths[i]);
+                }
+            } else {
+                auto loadPassTex = [&](const PassData& pass) {
+                    for (int i = 0; i < 4; ++i) {
+                        const auto& ch = pass.channels[i];
+                        if (ch.source == ChannelBinding::Source::ExternalTexture && !ch.texturePath.empty()) {
+                            if (!d3dTextures->HasTexture(i)) {
+                                if (ch.textureType == ChannelType::CubeMap)
+                                    d3dTextures->LoadCubeMap(i, ch.texturePath);
+                                else
+                                    d3dTextures->LoadTexture(i, ch.texturePath);
+                            }
+                        }
+                    }
+                };
+                loadPassTex(data.imagePass);
+                for (const auto& bp : data.bufferPasses) loadPassTex(bp);
+                if (data.hasCubeMapPass) loadPassTex(data.cubeMapPass);
+            }
+        }
+
+        if (!SetupD3D11MultiPass(projData)) {
+            std::cerr << "Failed to setup D3D11 multi-pass: "
+                      << (d3dMultiPass ? d3dMultiPass->GetLastError() : "null") << std::endl;
+            SDL_Quit();
+            return 1;
+        }
+    }
+#endif
 
     std::cout << "Shader loaded: " << config.shaderPath
               << (projData.isMultiPass ? " (multi-pass)" : " (single-pass)") << std::endl;
@@ -1039,19 +1273,38 @@ int main(int argc, char* argv[]) {
             ShaderProject newProject;
             if (newProject.Load(config.shaderPath)) {
                 project = std::move(newProject);
-                // 重新加载纹理（新 shader 可能需要不同的纹理）
-                LoadTexturesForProject(project.GetData());
-                if (SetupMultiPass(project.GetData())) {
-                    lastShaderError.clear();
-                    std::cout << "Shader reloaded successfully." << std::endl;
-                    // 更新 tray 当前 shader 标记
-                    if (config.wallpaperMode) {
-                        tray.SetShaderList(debugState.glslFiles, debugState.jsonFiles,
-                                           debugState.dirFiles, config.shaderPath);
+#ifdef _WIN32
+                if (useD3D11) {
+                    // D3D11 路径热加载
+                    if (d3dTextures) d3dTextures->Clear();
+                    // TODO: 重新加载 D3D11 纹理（类似 LoadTexturesForProject）
+                    if (SetupD3D11MultiPass(project.GetData())) {
+                        lastShaderError.clear();
+                        std::cout << "D3D11 Shader reloaded successfully." << std::endl;
+                        if (config.wallpaperMode) {
+                            tray.SetShaderList(debugState.glslFiles, debugState.jsonFiles,
+                                               debugState.dirFiles, config.shaderPath);
+                        }
+                    } else {
+                        lastShaderError = d3dMultiPass ? d3dMultiPass->GetLastError() : "D3D11 setup failed";
+                        std::cerr << "D3D11 Shader reload failed: " << lastShaderError << std::endl;
                     }
-                } else {
-                    lastShaderError = multiPass.GetLastError();
-                    std::cerr << "Shader reload failed: " << lastShaderError << std::endl;
+                } else
+#endif
+                {
+                    // OpenGL 路径热加载
+                    LoadTexturesForProject(project.GetData());
+                    if (SetupMultiPass(project.GetData())) {
+                        lastShaderError.clear();
+                        std::cout << "Shader reloaded successfully." << std::endl;
+                        if (config.wallpaperMode) {
+                            tray.SetShaderList(debugState.glslFiles, debugState.jsonFiles,
+                                               debugState.dirFiles, config.shaderPath);
+                        }
+                    } else {
+                        lastShaderError = multiPass.GetLastError();
+                        std::cerr << "Shader reload failed: " << lastShaderError << std::endl;
+                    }
                 }
             } else {
                 lastShaderError = newProject.GetLastError();
@@ -1164,10 +1417,7 @@ int main(int argc, char* argv[]) {
 
         // 渲染
         if (config.wallpaperMode && !wallpaperWindows.empty()) {
-            // 壁纸模式优化：Buffer pass 只渲染一次，Image pass 对每个显示器分别渲染
-            // Buffer pass 使用最大显示器的降分辨率尺寸（config.width/height 已是 maxW/maxH）
-
-            // 检查是否所有显示器都被遮挡，是则跳过整帧（含 Buffer pass）
+            // 检查是否所有显示器都被遮挡
             bool allOccluded = config.pauseOnFullscreen &&
                 std::all_of(wallpaperWindows.begin(), wallpaperWindows.end(),
                             [](const WallpaperWindow& ww) { return ww.occluded; });
@@ -1176,7 +1426,95 @@ int main(int argc, char* argv[]) {
                 continue;
             }
 
-            SDL_GL_MakeCurrent(wallpaperWindows[0].window, glContext);
+#ifdef _WIN32
+            if (useD3D11 && d3dRenderer && d3dMultiPass) {
+                // ============ D3D11 壁纸渲染路径 ============
+                Uint64 renderStart = SDL_GetPerformanceCounter();
+                auto* ctx = d3dRenderer->GetContext();
+
+                int bufferW = useScaledRender
+                    ? std::max(1, static_cast<int>(config.width * config.renderScale))
+                    : config.width;
+                int bufferH = useScaledRender
+                    ? std::max(1, static_cast<int>(config.height * config.renderScale))
+                    : config.height;
+
+                float bufferMouse[4] = {mouse[0], mouse[1], mouse[2], mouse[3]};
+                if (useScaledRender) {
+                    for (int i = 0; i < 4; ++i) bufferMouse[i] *= config.renderScale;
+                }
+
+                // 设置全屏三角形 VS（所有 pass 共享）
+                ctx->VSSetShader(d3dRenderer->GetFullscreenVS(), nullptr, 0);
+
+                d3dMultiPass->RenderBufferPasses(ctx, currentTime, timeDelta, frameCount,
+                                                  bufferMouse, date, bufferW, bufferH, clickTime);
+
+                Uint64 bufferEnd = SDL_GetPerformanceCounter();
+                float bufferTime = static_cast<float>(bufferEnd - renderStart) / static_cast<float>(freq);
+
+                for (auto& ww : wallpaperWindows) {
+                    if (ww.occluded && config.pauseOnFullscreen) continue;
+
+                    // 鼠标坐标转局部
+                    float localMouse[4];
+                    float localX = mouse[0] - static_cast<float>(ww.x);
+                    float localY = static_cast<float>(ww.height) - (mouse[1] - static_cast<float>(ww.y));
+                    bool inMon = (localX >= 0 && localX < ww.width && localY >= 0 && localY < ww.height);
+                    localMouse[0] = inMon ? localX : -1.0f;
+                    localMouse[1] = inMon ? localY : -1.0f;
+                    float cAX = fabsf(mouse[2]), cAY = fabsf(mouse[3]);
+                    float cLX = cAX - static_cast<float>(ww.x);
+                    float cLY = static_cast<float>(ww.height) - (cAY - static_cast<float>(ww.y));
+                    bool cIn = (cLX >= 0 && cLX < ww.width && cLY >= 0 && cLY < ww.height);
+                    localMouse[2] = cIn ? ((mouse[2] >= 0) ? cLX : -cLX) : 0.0f;
+                    localMouse[3] = cIn ? ((mouse[3] >= 0) ? cLY : -cLY) : 0.0f;
+
+                    Uint64 imageStart = SDL_GetPerformanceCounter();
+
+                    ctx->VSSetShader(d3dRenderer->GetFullscreenVS(), nullptr, 0);
+
+                    if (useScaledRender && ww.d3dBlit && ww.d3dBlit->IsInitialized()) {
+                        int rW = std::max(1, static_cast<int>(ww.width * config.renderScale));
+                        int rH = std::max(1, static_cast<int>(ww.height * config.renderScale));
+                        float sMouse[4] = { localMouse[0]*config.renderScale, localMouse[1]*config.renderScale,
+                                            localMouse[2]*config.renderScale, localMouse[3]*config.renderScale };
+                        d3dMultiPass->SetImageTargetRTV(ww.d3dBlit->GetRenderRTV(), rW, rH);
+                        d3dMultiPass->RenderImagePass(ctx, currentTime, timeDelta, frameCount,
+                                                       sMouse, date, rW, rH, clickTime);
+                        d3dRenderer->BeginFrame(ww.d3dSwapChainIndex);
+                        ctx->VSSetShader(d3dRenderer->GetFullscreenVS(), nullptr, 0);
+                        ww.d3dBlit->BlitToTarget(d3dRenderer->GetBackBufferRTV(ww.d3dSwapChainIndex),
+                                                  ww.width, ww.height);
+                    } else {
+                        d3dMultiPass->SetImageTargetRTV(nullptr);
+                        d3dRenderer->BeginFrame(ww.d3dSwapChainIndex);
+                        ctx->VSSetShader(d3dRenderer->GetFullscreenVS(), nullptr, 0);
+                        d3dMultiPass->RenderImagePass(ctx, currentTime, timeDelta, frameCount,
+                                                       localMouse, date, ww.width, ww.height, clickTime);
+                    }
+
+                    d3dRenderer->Present(ww.d3dSwapChainIndex, 0);
+
+                    Uint64 imageEnd = SDL_GetPerformanceCounter();
+                    float imageTime = static_cast<float>(imageEnd - imageStart) / static_cast<float>(freq);
+                    lastRenderElapsed = bufferTime + imageTime;
+                }
+
+                // 托盘 tooltip 更新
+                Uint32 tooltipNow = SDL_GetTicks();
+                if (tooltipNow - trayTooltipTimer > 1000) {
+                    trayTooltipTimer = tooltipNow;
+                    std::string shaderDisplayName = config.shaderPath;
+                    auto slashPos = shaderDisplayName.find_last_of("/\\");
+                    if (slashPos != std::string::npos) shaderDisplayName = shaderDisplayName.substr(slashPos + 1);
+                    tray.UpdateTooltip(measuredFPS, lastRenderElapsed * 1000.0f, shaderDisplayName, config.monitorIndex);
+                }
+            } else
+#endif
+            {
+                // ============ OpenGL 壁纸渲染路径（原有逻辑）============
+                SDL_GL_MakeCurrent(wallpaperWindows[0].window, glContext);
 
             Uint64 renderStart = SDL_GetPerformanceCounter();  // 计时包含 Buffer + Image pass
 
@@ -1301,6 +1639,7 @@ int main(int argc, char* argv[]) {
                 tray.UpdateTooltip(measuredFPS, lastRenderElapsed * 1000.0f,
                                    shaderDisplayName, config.monitorIndex);
             }
+            } // end OpenGL wallpaper else block
         } else {
             // 窗口模式
             Uint64 renderStart = SDL_GetPerformanceCounter();
@@ -1383,6 +1722,18 @@ int main(int argc, char* argv[]) {
     debugUI.Shutdown();
     blitRenderer.Cleanup();
 
+#ifdef _WIN32
+    // D3D11 资源释放
+    if (useD3D11) {
+        for (auto& ww : wallpaperWindows) {
+            ww.d3dBlit.reset();
+        }
+        d3dMultiPass.reset();
+        d3dTextures.reset();
+        d3dRenderer.reset();
+    }
+#endif
+
     // 壁纸模式：在 GL context 销毁前释放各显示器的 BlitRenderer
     if (config.wallpaperMode) {
         for (auto& ww : wallpaperWindows) {
@@ -1394,7 +1745,9 @@ int main(int argc, char* argv[]) {
         Wallpaper::Restore();
     }
 
-    SDL_GL_DeleteContext(glContext);
+    if (glContext) {
+        SDL_GL_DeleteContext(glContext);
+    }
     if (config.wallpaperMode) {
         for (auto& ww : wallpaperWindows) {
             SDL_DestroyWindow(ww.window);
