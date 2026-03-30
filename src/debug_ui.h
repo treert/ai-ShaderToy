@@ -4,6 +4,12 @@
 #include <vector>
 #include <SDL.h>
 
+#ifdef _WIN32
+struct ID3D11Device;
+struct ID3D11DeviceContext;
+struct ID3D11RenderTargetView;
+#endif
+
 /// 调试 UI 需要读写的应用状态（main.cpp 与 DebugUI 之间的数据桥梁）
 struct DebugUIState {
     // === 只读信息展示（main.cpp 每帧写入，DebugUI 读取展示） ===
@@ -47,6 +53,14 @@ public:
     /// 初始化 ImGui（创建 Context、初始化 SDL2+GL3 后端、配置样式）
     bool Init(SDL_Window* window, SDL_GLContext glContext);
 
+#ifdef _WIN32
+    /// 初始化 ImGui（D3D11 后端）
+    bool InitD3D11(SDL_Window* window, ID3D11Device* device, ID3D11DeviceContext* context);
+
+    /// D3D11 渲染提交前设置 RTV（每帧调用，在 Render/RenderOverlay 之前）
+    void SetD3D11RenderTarget(ID3D11RenderTargetView* rtv);
+#endif
+
     /// 销毁 ImGui（后端 + Context）
     void Shutdown();
 
@@ -83,6 +97,12 @@ public:
 private:
     bool initialized_ = false;
     bool visible_     = false;
+    bool useD3D11_    = false;
+
+#ifdef _WIN32
+    ID3D11DeviceContext* d3dContext_ = nullptr;
+    ID3D11RenderTargetView* d3dRTV_ = nullptr;
+#endif
 
     // EMA 平滑（统一更新）
     void UpdateSmoothing(const DebugUIState& state);

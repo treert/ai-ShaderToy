@@ -61,6 +61,7 @@ struct AppConfig {
     bool        showDebug = false;   // 壁纸模式下显示只读 Debug 信息（--debug）
     bool        hotReload = true;
     bool        translateMode = false; // 翻译模式：GLSL→HLSL 翻译后输出到 Logs 目录
+    bool        useD3D11Mode = false; // 窗口模式使用 D3D11 渲染（--d3d11）
     int         width  = kDefaultWidth;
     int         height = kDefaultHeight;
     int         targetFPS = -1;      // -1 表示未指定，壁纸模式默认30，窗口模式默认60
@@ -173,6 +174,7 @@ static void PrintUsage(const char* programName) {
               << "  --debug              Show debug overlay in wallpaper mode (default: off)\n"
               << "  --no-pause-on-fullscreen  Disable auto-pause when fullscreen app covers desktop\n"
               << "  --translate          Translate shader (GLSL->HLSL) and save to Logs directory, then exit\n"
+              << "  --d3d11              Use D3D11 renderer in window mode (default: OpenGL)\n"
               << "  --help, -h           Show this help\n";
 }
 
@@ -223,6 +225,8 @@ static AppConfig ParseArgs(int argc, char* argv[]) {
             config.pauseOnFullscreen = false;
         } else if (arg == "--translate") {
             config.translateMode = true;
+        } else if (arg == "--d3d11") {
+            config.useD3D11Mode = true;
         } else if (arg == "--help" || arg == "-h") {
             PrintUsage(argv[0]);
             exit(0);
@@ -370,7 +374,7 @@ int main(int argc, char* argv[]) {
             shaderName = srcPath.filename().string();
         }
 
-        auto logDir = GetLogDir();
+        auto logDir = GetLogDir() / "translate-mode";
         bool isMulti = data.isMultiPass || data.hasCubeMapPass || !data.commonSource.empty();
         fs::path outDir = isMulti ? (logDir / shaderName) : logDir;
 
@@ -528,31 +532,80 @@ int main(int argc, char* argv[]) {
 
     // 窗口模式
     if (!config.wallpaperMode) {
-        Uint32 windowFlags = SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
-        window = SDL_CreateWindow(
-            kWindowTitle,
-            SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-            config.width, config.height,
-            windowFlags
-        );
+#ifdef _WIN32
+        if (config.useD3D11Mode) {
+            // D3D11 窗口模式：不创建 OpenGL 上下文
+            Uint32 windowFlags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
+            window = SDL_CreateWindow(
+                kWindowTitle,
+                SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                config.width, config.height,
+                windowFlags
+            );
+            if (!window) {
+                std::cerr << "SDL_CreateWindow failed: " << SDL_GetError() << std::endl;
+                SDL_Quit();
+                return 1;
+            }
+
+            // 初始化 D3D11
+            d3dRenderer = std::make_unique<D3D11Renderer>();
+            if (!d3dRenderer->Init()) {
+                std::cerr << "D3D11 init failed: " << d3dRenderer->GetLastError()
+                          << ", falling back to OpenGL." << std::endl;
+                d3dRenderer.reset();
+                config.useD3D11Mode = false;
+                // 降级到 OpenGL：重建窗口
+                SDL_DestroyWindow(window);
+                window = nullptr;
+            } else {
+                SDL_SysWMinfo wmInfo;
+                SDL_VERSION(&wmInfo.version);
+                int scIdx = -1;
+                if (SDL_GetWindowWMInfo(window, &wmInfo)) {
+                    scIdx = d3dRenderer->AddSwapChain(wmInfo.info.win.window, config.width, config.height);
+                }
+                if (scIdx < 0) {
+                    std::cerr << "D3D11 SwapChain creation failed, falling back to OpenGL." << std::endl;
+                    d3dRenderer.reset();
+                    config.useD3D11Mode = false;
+                    SDL_DestroyWindow(window);
+                    window = nullptr;
+                } else {
+                    useD3D11 = true;
+                    std::cout << "Window mode: D3D11 renderer" << std::endl;
+                }
+            }
+        }
+#endif
+        // OpenGL 窗口模式（默认，或 D3D11 降级后）
         if (!window) {
-            std::cerr << "SDL_CreateWindow failed: " << SDL_GetError() << std::endl;
-            SDL_Quit();
-            return 1;
-        }
-        glContext = SDL_GL_CreateContext(window);
-        if (!glContext) {
-            std::cerr << "SDL_GL_CreateContext failed: " << SDL_GetError() << std::endl;
-            SDL_DestroyWindow(window);
-            SDL_Quit();
-            return 1;
-        }
-        if (!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress)) {
-            std::cerr << "gladLoadGLLoader failed." << std::endl;
-            SDL_GL_DeleteContext(glContext);
-            SDL_DestroyWindow(window);
-            SDL_Quit();
-            return 1;
+            Uint32 windowFlags = SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
+            window = SDL_CreateWindow(
+                kWindowTitle,
+                SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                config.width, config.height,
+                windowFlags
+            );
+            if (!window) {
+                std::cerr << "SDL_CreateWindow failed: " << SDL_GetError() << std::endl;
+                SDL_Quit();
+                return 1;
+            }
+            glContext = SDL_GL_CreateContext(window);
+            if (!glContext) {
+                std::cerr << "SDL_GL_CreateContext failed: " << SDL_GetError() << std::endl;
+                SDL_DestroyWindow(window);
+                SDL_Quit();
+                return 1;
+            }
+            if (!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress)) {
+                std::cerr << "gladLoadGLLoader failed." << std::endl;
+                SDL_GL_DeleteContext(glContext);
+                SDL_DestroyWindow(window);
+                SDL_Quit();
+                return 1;
+            }
         }
     }
 
@@ -578,25 +631,43 @@ int main(int argc, char* argv[]) {
               << ", Render scale: " << config.renderScale << std::endl;
 
     // ============================================================
-    // D3D11 壁纸模式：初始化渲染资源
+    // D3D11 渲染资源初始化（壁纸模式 + 窗口 D3D11 模式共用）
     // ============================================================
 #ifdef _WIN32
+    std::unique_ptr<D3D11BlitRenderer> d3dWindowBlit; // 窗口模式 D3D11 降分辨率渲染器
     if (useD3D11 && d3dRenderer) {
         bool useScaledD3D = (config.renderScale < 1.0f);
-        if (useScaledD3D) {
-            for (auto& ww : wallpaperWindows) {
-                ww.d3dBlit = std::make_unique<D3D11BlitRenderer>();
-                if (!ww.d3dBlit->Init(d3dRenderer->GetDevice(), d3dRenderer->GetContext())) {
-                    std::cerr << "D3D11BlitRenderer init failed." << std::endl;
-                    useScaledD3D = false;
-                    break;
+        if (config.wallpaperMode) {
+            // 壁纸模式：每个显示器独立的 BlitRenderer
+            if (useScaledD3D) {
+                for (auto& ww : wallpaperWindows) {
+                    ww.d3dBlit = std::make_unique<D3D11BlitRenderer>();
+                    if (!ww.d3dBlit->Init(d3dRenderer->GetDevice(), d3dRenderer->GetContext())) {
+                        std::cerr << "D3D11BlitRenderer init failed." << std::endl;
+                        useScaledD3D = false;
+                        break;
+                    }
+                    ww.d3dBlit->CreateRenderTarget(ww.width, ww.height, config.renderScale);
+                    std::cout << "D3D11 Monitor (" << ww.x << "," << ww.y << ") scaled: "
+                              << ww.d3dBlit->GetRenderWidth() << "x" << ww.d3dBlit->GetRenderHeight() << std::endl;
                 }
-                ww.d3dBlit->CreateRenderTarget(ww.width, ww.height, config.renderScale);
-                std::cout << "D3D11 Monitor (" << ww.x << "," << ww.y << ") scaled: "
-                          << ww.d3dBlit->GetRenderWidth() << "x" << ww.d3dBlit->GetRenderHeight() << std::endl;
+                if (!useScaledD3D) {
+                    for (auto& ww : wallpaperWindows) ww.d3dBlit.reset();
+                }
             }
-            if (!useScaledD3D) {
-                for (auto& ww : wallpaperWindows) ww.d3dBlit.reset();
+        } else {
+            // 窗口模式 D3D11：单个 BlitRenderer
+            if (useScaledD3D) {
+                d3dWindowBlit = std::make_unique<D3D11BlitRenderer>();
+                if (!d3dWindowBlit->Init(d3dRenderer->GetDevice(), d3dRenderer->GetContext())) {
+                    std::cerr << "D3D11BlitRenderer init failed, disabling scaled rendering." << std::endl;
+                    d3dWindowBlit.reset();
+                    useScaledD3D = false;
+                } else {
+                    d3dWindowBlit->CreateRenderTarget(config.width, config.height, config.renderScale);
+                    std::cout << "D3D11 Window scaled: "
+                              << d3dWindowBlit->GetRenderWidth() << "x" << d3dWindowBlit->GetRenderHeight() << std::endl;
+                }
             }
         }
 
@@ -927,23 +998,27 @@ int main(int argc, char* argv[]) {
     std::cout << "Shader loaded: " << config.shaderPath
               << (projData.isMultiPass ? " (multi-pass)" : " (single-pass)") << std::endl;
 
-    // 壁纸模式：翻译输出 HLSL 到 Logs/wallpaper-runtime/ 用于调试
-    auto dumpWallpaperHlsl = [&]() {
-        if (!config.wallpaperMode) return;
+
+    // HLSL 翻译输出：任何使用 D3D11 的模式都自动 dump HLSL 到对应目录
+    auto dumpHlsl = [&]() {
+#ifdef _WIN32
+        if (!useD3D11) return;
         namespace fs = std::filesystem;
         fs::path srcPath(config.shaderPath);
         std::string shaderName = srcPath.stem().string();
         if (fs::is_directory(srcPath)) {
             shaderName = srcPath.filename().string();
         }
-        fs::path outDir = GetLogDir() / "wallpaper-runtime";
-        std::cout << "Wallpaper HLSL dump: " << config.shaderPath << std::endl;
+        std::string subDir = config.wallpaperMode ? "wallpaper-mode" : "window-mode";
+        fs::path outDir = GetLogDir() / subDir;
+        std::cout << "HLSL dump (" << subDir << "): " << config.shaderPath << std::endl;
         int errors = TranslateAndDumpHlsl(project.GetData(), shaderName, outDir);
         if (errors > 0) {
             std::cerr << "WARNING: " << errors << " pass(es) had HLSL compile errors." << std::endl;
         }
+#endif
     };
-    dumpWallpaperHlsl();
+    dumpHlsl();
 
     // ============================================================
     // 热加载
@@ -1069,8 +1144,17 @@ int main(int argc, char* argv[]) {
     // 调试 UI 初始化（窗口模式始终初始化，壁纸模式仅 --debug 时初始化）
     // ============================================================
     if (!config.wallpaperMode) {
-        if (!debugUI.Init(window, glContext)) {
-            std::cerr << "DebugUI init failed, continuing without debug panel." << std::endl;
+#ifdef _WIN32
+        if (useD3D11 && d3dRenderer) {
+            if (!debugUI.InitD3D11(window, d3dRenderer->GetDevice(), d3dRenderer->GetContext())) {
+                std::cerr << "DebugUI D3D11 init failed, continuing without debug panel." << std::endl;
+            }
+        } else
+#endif
+        {
+            if (!debugUI.Init(window, glContext)) {
+                std::cerr << "DebugUI init failed, continuing without debug panel." << std::endl;
+            }
         }
         ScanShaderFiles();
         debugState.targetFPS = config.targetFPS;
@@ -1233,8 +1317,16 @@ int main(int argc, char* argv[]) {
         debugState.shaderPath  = config.shaderPath;
         debugState.shaderError = lastShaderError;
         debugState.paused      = paused.load();
-        debugState.isMultiPass = multiPass.IsMultiPass();
-        debugState.passNames   = multiPass.GetPassNames();
+#ifdef _WIN32
+        if (useD3D11 && d3dMultiPass) {
+            debugState.isMultiPass = d3dMultiPass->IsMultiPass();
+            debugState.passNames   = d3dMultiPass->GetPassNames();
+        } else
+#endif
+        {
+            debugState.isMultiPass = multiPass.IsMultiPass();
+            debugState.passNames   = multiPass.GetPassNames();
+        }
     };
 
     while (running) {
@@ -1265,13 +1357,29 @@ int main(int argc, char* argv[]) {
                 if (event.window.event == SDL_WINDOWEVENT_RESIZED) {
                     config.width = event.window.data1;
                     config.height = event.window.data2;
-                    renderer.SetViewport(config.width, config.height);
-                    if (useScaledRender) {
-                        blitRenderer.CreateRenderFBO(config.width, config.height, config.renderScale);
-                        multiPass.Resize(blitRenderer.GetRenderWidth(), blitRenderer.GetRenderHeight());
-                        multiPass.SetImageTargetFBO(blitRenderer.GetRenderFBO());
-                    } else {
-                        multiPass.Resize(config.width, config.height);
+#ifdef _WIN32
+                    if (useD3D11 && !config.wallpaperMode && d3dRenderer) {
+                        // D3D11 窗口模式 resize
+                        d3dRenderer->ResizeSwapChain(0, config.width, config.height);
+                        if (d3dWindowBlit) {
+                            d3dWindowBlit->CreateRenderTarget(config.width, config.height, config.renderScale);
+                        }
+                        if (d3dMultiPass) {
+                            int rW = d3dWindowBlit ? d3dWindowBlit->GetRenderWidth() : config.width;
+                            int rH = d3dWindowBlit ? d3dWindowBlit->GetRenderHeight() : config.height;
+                            d3dMultiPass->Resize(rW, rH);
+                        }
+                    } else
+#endif
+                    {
+                        renderer.SetViewport(config.width, config.height);
+                        if (useScaledRender) {
+                            blitRenderer.CreateRenderFBO(config.width, config.height, config.renderScale);
+                            multiPass.Resize(blitRenderer.GetRenderWidth(), blitRenderer.GetRenderHeight());
+                            multiPass.SetImageTargetFBO(blitRenderer.GetRenderFBO());
+                        } else {
+                            multiPass.Resize(config.width, config.height);
+                        }
                     }
                 }
                 break;
@@ -1395,16 +1503,26 @@ int main(int argc, char* argv[]) {
                                 ww.blit->Init();
                             }
                         }
+#ifdef _WIN32
+                    } else if (useD3D11 && d3dRenderer) {
+                        if (!d3dWindowBlit) {
+                            d3dWindowBlit = std::make_unique<D3D11BlitRenderer>();
+                            d3dWindowBlit->Init(d3dRenderer->GetDevice(), d3dRenderer->GetContext());
+                        }
+#endif
                     } else if (!blitRenderer.IsInitialized()) {
                         blitRenderer.Init();
                     }
                 } else if (!newScaled) {
                     useScaledRender = false;
-                    // 释放壁纸模式下各显示器的 BlitRenderer（回收显存）
                     if (config.wallpaperMode) {
                         for (auto& ww : wallpaperWindows) {
                             ww.blit.reset();
                         }
+#ifdef _WIN32
+                    } else if (useD3D11) {
+                        d3dWindowBlit.reset();
+#endif
                     }
                 }
                 if (useScaledRender) {
@@ -1414,20 +1532,31 @@ int main(int argc, char* argv[]) {
                                 ww.blit->CreateRenderFBO(ww.width, ww.height, config.renderScale);
                             }
                         }
-                        // Buffer pass 用最大尺寸
                         int bufW = static_cast<int>(config.width * config.renderScale);
                         int bufH = static_cast<int>(config.height * config.renderScale);
                         if (bufW < 1) bufW = 1;
                         if (bufH < 1) bufH = 1;
                         multiPass.Resize(bufW, bufH);
+#ifdef _WIN32
+                    } else if (useD3D11 && d3dWindowBlit && d3dMultiPass) {
+                        d3dWindowBlit->CreateRenderTarget(config.width, config.height, config.renderScale);
+                        d3dMultiPass->Resize(d3dWindowBlit->GetRenderWidth(), d3dWindowBlit->GetRenderHeight());
+#endif
                     } else {
                         blitRenderer.CreateRenderFBO(config.width, config.height, config.renderScale);
                         multiPass.SetImageTargetFBO(blitRenderer.GetRenderFBO());
                         multiPass.Resize(blitRenderer.GetRenderWidth(), blitRenderer.GetRenderHeight());
                     }
                 } else {
-                    multiPass.SetImageTargetFBO(0);
-                    multiPass.Resize(config.width, config.height);
+#ifdef _WIN32
+                    if (useD3D11 && d3dMultiPass) {
+                        d3dMultiPass->Resize(config.width, config.height);
+                    } else
+#endif
+                    {
+                        multiPass.SetImageTargetFBO(0);
+                        multiPass.Resize(config.width, config.height);
+                    }
                 }
             }
         }
@@ -1468,7 +1597,7 @@ int main(int argc, char* argv[]) {
                     if (SetupD3D11MultiPass(project.GetData())) {
                         lastShaderError.clear();
                         std::cout << "D3D11 Shader reloaded successfully." << std::endl;
-                        dumpWallpaperHlsl();
+                        dumpHlsl();
                         if (config.wallpaperMode) {
                             tray.SetShaderList(debugState.glslFiles, debugState.jsonFiles,
                                                debugState.dirFiles, config.shaderPath);
@@ -1485,7 +1614,7 @@ int main(int argc, char* argv[]) {
                     if (SetupMultiPass(project.GetData())) {
                         lastShaderError.clear();
                         std::cout << "Shader reloaded successfully." << std::endl;
-                        dumpWallpaperHlsl();
+                        dumpHlsl();
                         if (config.wallpaperMode) {
                             tray.SetShaderList(debugState.glslFiles, debugState.jsonFiles,
                                                debugState.dirFiles, config.shaderPath);
@@ -1508,9 +1637,20 @@ int main(int argc, char* argv[]) {
                                static_cast<float>(config.width),
                                static_cast<float>(config.height), mouse);
 
-                debugUI.BeginFrame();
-                debugUI.Render(debugState);
-                SDL_GL_SwapWindow(window);
+#ifdef _WIN32
+                if (useD3D11 && d3dRenderer) {
+                    d3dRenderer->BeginFrame(0);
+                    debugUI.SetD3D11RenderTarget(d3dRenderer->GetBackBufferRTV(0));
+                    debugUI.BeginFrame();
+                    debugUI.Render(debugState);
+                    d3dRenderer->Present(0, 0);
+                } else
+#endif
+                {
+                    debugUI.BeginFrame();
+                    debugUI.Render(debugState);
+                    SDL_GL_SwapWindow(window);
+                }
             } else {
                 if (config.showDebug) {
                     for (auto& ww : wallpaperWindows) {
@@ -1818,41 +1958,89 @@ int main(int argc, char* argv[]) {
             // 窗口模式
             Uint64 renderStart = SDL_GetPerformanceCounter();
 
-            if (useScaledRender) {
-                int scaledW = static_cast<int>(config.width * config.renderScale);
-                int scaledH = static_cast<int>(config.height * config.renderScale);
-                if (scaledW != blitRenderer.GetRenderWidth() || scaledH != blitRenderer.GetRenderHeight()) {
-                    blitRenderer.CreateRenderFBO(config.width, config.height, config.renderScale);
-                    multiPass.Resize(blitRenderer.GetRenderWidth(), blitRenderer.GetRenderHeight());
+#ifdef _WIN32
+            if (useD3D11 && d3dRenderer && d3dMultiPass) {
+                // ============ D3D11 窗口模式渲染路径 ============
+                auto* ctx = d3dRenderer->GetContext();
+                bool useScaledD3D = (d3dWindowBlit && d3dWindowBlit->IsInitialized());
+
+                ctx->VSSetShader(d3dRenderer->GetFullscreenVS(), nullptr, 0);
+
+                if (useScaledD3D) {
+                    int rW = d3dWindowBlit->GetRenderWidth();
+                    int rH = d3dWindowBlit->GetRenderHeight();
+                    float sMouse[4] = { mouse[0]*config.renderScale, mouse[1]*config.renderScale,
+                                        mouse[2]*config.renderScale, mouse[3]*config.renderScale };
+                    d3dMultiPass->SetImageTargetRTV(d3dWindowBlit->GetRenderRTV(), rW, rH);
+                    d3dMultiPass->RenderAllPasses(ctx, currentTime, timeDelta, frameCount,
+                                                   sMouse, date, rW, rH, clickTime);
+                    d3dRenderer->BeginFrame(0);
+                    ctx->VSSetShader(d3dRenderer->GetFullscreenVS(), nullptr, 0);
+                    d3dWindowBlit->BlitToTarget(d3dRenderer->GetBackBufferRTV(0),
+                                                 config.width, config.height);
+                } else {
+                    d3dMultiPass->SetImageTargetRTV(nullptr);
+                    d3dRenderer->BeginFrame(0);
+                    ctx->VSSetShader(d3dRenderer->GetFullscreenVS(), nullptr, 0);
+                    d3dMultiPass->RenderAllPasses(ctx, currentTime, timeDelta, frameCount,
+                                                   mouse, date, config.width, config.height, clickTime);
                 }
 
-                multiPass.SetImageTargetFBO(blitRenderer.GetRenderFBO());
-                multiPass.RenderAllPasses(quadVAO, currentTime, timeDelta, frameCount,
-                                         mouse, date, blitRenderer.GetRenderWidth(),
-                                         blitRenderer.GetRenderHeight(), clickTime);
+                // DebugUI 渲染
+                {
+                    Uint64 renderEnd = SDL_GetPerformanceCounter();
+                    float renderElapsed = static_cast<float>(renderEnd - renderStart) / static_cast<float>(freq);
 
-                blitRenderer.BlitToScreen(config.width, config.height);
-            } else {
-                multiPass.SetImageTargetFBO(0);
-                multiPass.RenderAllPasses(quadVAO, currentTime, timeDelta, frameCount,
-                                         mouse, date, config.width, config.height, clickTime);
-            }
+                    fillDebugState(measuredFPS, currentTime, timeDelta, renderElapsed,
+                                   static_cast<float>(config.width),
+                                   static_cast<float>(config.height), mouse);
 
-            // DebugUI 渲染（在 shader 渲染后、SwapWindow 前）
+                    debugUI.SetD3D11RenderTarget(d3dRenderer->GetBackBufferRTV(0));
+                    debugUI.BeginFrame();
+                    debugUI.Render(debugState);
+                }
+
+                d3dRenderer->Present(0, 0);
+            } else
+#endif
             {
-                glFinish();
-                Uint64 renderEnd = SDL_GetPerformanceCounter();
-                float renderElapsed = static_cast<float>(renderEnd - renderStart) / static_cast<float>(freq);
+                // ============ OpenGL 窗口模式渲染路径 ============
+                if (useScaledRender) {
+                    int scaledW = static_cast<int>(config.width * config.renderScale);
+                    int scaledH = static_cast<int>(config.height * config.renderScale);
+                    if (scaledW != blitRenderer.GetRenderWidth() || scaledH != blitRenderer.GetRenderHeight()) {
+                        blitRenderer.CreateRenderFBO(config.width, config.height, config.renderScale);
+                        multiPass.Resize(blitRenderer.GetRenderWidth(), blitRenderer.GetRenderHeight());
+                    }
 
-                fillDebugState(measuredFPS, currentTime, timeDelta, renderElapsed,
-                               static_cast<float>(config.width),
-                               static_cast<float>(config.height), mouse);
+                    multiPass.SetImageTargetFBO(blitRenderer.GetRenderFBO());
+                    multiPass.RenderAllPasses(quadVAO, currentTime, timeDelta, frameCount,
+                                             mouse, date, blitRenderer.GetRenderWidth(),
+                                             blitRenderer.GetRenderHeight(), clickTime);
 
-                debugUI.BeginFrame();
-                debugUI.Render(debugState);
+                    blitRenderer.BlitToScreen(config.width, config.height);
+                } else {
+                    multiPass.SetImageTargetFBO(0);
+                    multiPass.RenderAllPasses(quadVAO, currentTime, timeDelta, frameCount,
+                                             mouse, date, config.width, config.height, clickTime);
+                }
+
+                // DebugUI 渲染（在 shader 渲染后、SwapWindow 前）
+                {
+                    glFinish();
+                    Uint64 renderEnd = SDL_GetPerformanceCounter();
+                    float renderElapsed = static_cast<float>(renderEnd - renderStart) / static_cast<float>(freq);
+
+                    fillDebugState(measuredFPS, currentTime, timeDelta, renderElapsed,
+                                   static_cast<float>(config.width),
+                                   static_cast<float>(config.height), mouse);
+
+                    debugUI.BeginFrame();
+                    debugUI.Render(debugState);
+                }
+
+                SDL_GL_SwapWindow(window);
             }
-
-            SDL_GL_SwapWindow(window);
         }
         frameCount++;
 
@@ -1899,6 +2087,7 @@ int main(int argc, char* argv[]) {
 #ifdef _WIN32
     // D3D11 资源释放
     if (useD3D11) {
+        d3dWindowBlit.reset();
         for (auto& ww : wallpaperWindows) {
             ww.d3dBlit.reset();
         }

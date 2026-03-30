@@ -95,9 +95,12 @@
 - [x] CMakeLists.txt 更新（d3d11/dxgi/d3dcompiler 链接）
 - [x] Debug 代码清理（移除红色 glClear 测试、drawable 日志）
 - [ ] 实机测试（Win11 24H2 壁纸模式验证）
-- [ ] 壁纸模式 DebugUI（ImGui D3D11 后端适配）
+- [x] 壁纸模式 DebugUI（ImGui D3D11 后端适配）
 - [ ] SPIRV-Cross 升级（替代文本翻译器，提高 GLSL→HLSL 翻译正确性）
 - [x] --translate 翻译模式（GLSL→HLSL 翻译输出到 Logs 目录，单 pass 输出单文件，多 pass 输出到子目录）
 - [x] --translate 翻译模式编译验证（D3DCompile ps_5_0 验证每个 pass，错误信息输出到控制台和 .hlsl 文件末尾注释）
 - [x] 壁纸模式运行时 HLSL dump（初始加载和热加载成功后自动翻译+编译验证，输出到 Logs/wallpaper-runtime/）
 - [x] WrapShaderToyHlsl 公共函数抽取（从 D3D11ShaderManager 抽取为 glsl_to_hlsl.h/cpp 自由函数，翻译模式无需 D3D11）
+- [x] 窗口模式 D3D11 渲染（--d3d11 开关，复用壁纸模式 D3D11 组件，支持 resize/DebugUI/热加载）
+- [x] DebugUI 双后端支持（OpenGL + D3D11 ImGui 后端，InitD3D11 方法，按 useD3D11_ 分发渲染调用）
+- [x] 统一 HLSL 翻译输出路径（translate-mode / wallpaper-mode / window-mode 三个子目录，D3D11 模式自动 dump）

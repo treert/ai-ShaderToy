@@ -4,6 +4,11 @@
 #include <imgui_impl_sdl2.h>
 #include <imgui_impl_opengl3.h>
 
+#ifdef _WIN32
+#include <imgui_impl_dx11.h>
+#include <d3d11.h>
+#endif
+
 DebugUI::DebugUI() = default;
 
 DebugUI::~DebugUI() {
@@ -43,12 +48,58 @@ bool DebugUI::Init(SDL_Window* window, SDL_GLContext glContext) {
     return true;
 }
 
+#ifdef _WIN32
+bool DebugUI::InitD3D11(SDL_Window* window, ID3D11Device* device, ID3D11DeviceContext* context) {
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.IniFilename = nullptr;
+
+    ImGui::StyleColorsDark();
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.WindowRounding   = 6.0f;
+    style.FrameRounding    = 4.0f;
+    style.GrabRounding     = 4.0f;
+    style.Alpha            = 0.9f;
+    style.WindowBorderSize = 1.0f;
+
+    if (!ImGui_ImplSDL2_InitForD3D(window)) {
+        ImGui::DestroyContext();
+        return false;
+    }
+    if (!ImGui_ImplDX11_Init(device, context)) {
+        ImGui_ImplSDL2_Shutdown();
+        ImGui::DestroyContext();
+        return false;
+    }
+
+    useD3D11_ = true;
+    d3dContext_ = context;
+    initialized_ = true;
+    return true;
+}
+
+void DebugUI::SetD3D11RenderTarget(ID3D11RenderTargetView* rtv) {
+    d3dRTV_ = rtv;
+}
+#endif
+
 void DebugUI::Shutdown() {
     if (!initialized_) return;
-    ImGui_ImplOpenGL3_Shutdown();
+#ifdef _WIN32
+    if (useD3D11_) {
+        ImGui_ImplDX11_Shutdown();
+    } else
+#endif
+    {
+        ImGui_ImplOpenGL3_Shutdown();
+    }
     ImGui_ImplSDL2_Shutdown();
     ImGui::DestroyContext();
     initialized_ = false;
+    useD3D11_ = false;
 }
 
 void DebugUI::ProcessEvent(const SDL_Event& event) {
@@ -58,7 +109,14 @@ void DebugUI::ProcessEvent(const SDL_Event& event) {
 
 void DebugUI::BeginFrame(int windowWidth, int windowHeight) {
     if (!initialized_) return;
-    ImGui_ImplOpenGL3_NewFrame();
+#ifdef _WIN32
+    if (useD3D11_) {
+        ImGui_ImplDX11_NewFrame();
+    } else
+#endif
+    {
+        ImGui_ImplOpenGL3_NewFrame();
+    }
     ImGui_ImplSDL2_NewFrame();
     // 覆盖 DisplaySize（壁纸模式多窗口时，ImGui 绑定的是第一个窗口，
     // 需要手动设置当前渲染窗口的实际尺寸）
@@ -234,7 +292,17 @@ void DebugUI::Render(DebugUIState& state) {
 
     // 提交渲染
     ImGui::Render();
-    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+#ifdef _WIN32
+    if (useD3D11_) {
+        if (d3dRTV_ && d3dContext_) {
+            d3dContext_->OMSetRenderTargets(1, &d3dRTV_, nullptr);
+        }
+        ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+    } else
+#endif
+    {
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    }
 }
 
 void DebugUI::RenderOverlay(const DebugUIState& state) {
@@ -279,7 +347,17 @@ void DebugUI::RenderOverlay(const DebugUIState& state) {
 
     // 提交渲染
     ImGui::Render();
-    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+#ifdef _WIN32
+    if (useD3D11_) {
+        if (d3dRTV_ && d3dContext_) {
+            d3dContext_->OMSetRenderTargets(1, &d3dRTV_, nullptr);
+        }
+        ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+    } else
+#endif
+    {
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    }
 }
 
 bool DebugUI::WantCaptureMouse() const {
