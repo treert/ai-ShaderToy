@@ -44,3 +44,4 @@ Desktop.ini
 !.codebuddy/rules/
 !.codebuddy/commands/
 !.codebuddy/agents/
+tests/golden_hlsl/  
