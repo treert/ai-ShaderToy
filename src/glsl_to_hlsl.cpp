@@ -15,6 +15,7 @@
 #include <glslang/Public/ResourceLimits.h>
 #include <SPIRV/GlslangToSpv.h>
 #include <spirv_hlsl.hpp>
+#include "hlsl_fixup.h"
 
 void InitShaderTranslator() {
     glslang::InitializeProcess();
@@ -338,115 +339,11 @@ static std::string CrossCompileToHlsl(const std::vector<uint32_t>& spirv,
 
         std::string hlsl = compiler.compile();
 
-        // 后处理：删除 SPIRV-Cross 生成的 "_stU_" 前缀
-        // set_name(ub.id, "_stU") → SPIRV-Cross cbuffer 成员名 _stU_memberName
-        // 简单字符串替换即可，不需要正则（确定性前缀，与用户代码冲突概率极低）
-        {
-            const std::string prefix = "_stU_";
-            size_t pos = 0;
-            while ((pos = hlsl.find(prefix, pos)) != std::string::npos) {
-                hlsl.erase(pos, prefix.size());
-            }
-        }
-
-        // 后处理：D3D11 SV_Position.y 是 top-down（top=0.5, bottom=H-0.5）
-        // 而 OpenGL gl_FragCoord.y 是 bottom-up（bottom=0.5, top=H-0.5）
-        // Image pass 需要翻转（最终输出到屏幕），Buffer pass 不翻转
-        // （Buffer pass 不翻转时 texelFetch(ivec2(fragCoord)) 坐标和 RTV 一致）
-        // 注意：全局 iResolution 在 frag_main() 中才赋值，但 Y 翻转在 frag_main() 之前，
-        //       所以必须使用 cbuffer 中的 iResolution4 成员（经过前缀删除后无数字前缀）
-        if (flipFragCoordY) {
-            const std::string wLine = "gl_FragCoord.w = 1.0 / gl_FragCoord.w;";
-            size_t wPos = hlsl.find(wLine);
-            if (wPos != std::string::npos) {
-                // 查找 cbuffer 中实际的 iResolution4 成员名
-                // 匹配 packoffset(c0) 所在行的成员名（iResolution4 或可能带残留前缀）
-                std::string resName = "iResolution4";  // 默认：前缀已清理后的名字
-                std::regex resRe(R"((\w*iResolution4)\s*:\s*packoffset)");
-                std::smatch resMatch;
-                if (std::regex_search(hlsl, resMatch, resRe)) {
-                    resName = resMatch[1].str();
-                }
-                size_t insertPos = wPos + wLine.size();
-                hlsl.insert(insertPos,
-                    "\n    gl_FragCoord.y = " + resName + ".y - gl_FragCoord.y;"
-                );
-            }
-        }
-
-        // 注：变量名冲突重命名和 tanh 安全化已上移到 GLSL 层 PreprocessGlsl()，
-        //     在送给 glslang 之前处理，SPIRV-Cross 输出的 HLSL 不再需要这两项后处理。
-
-        // 后处理：修复 X3507 "Not all control paths return a value"
-        // 为非 void 函数添加兜底 return 语句
-        // SPIRV-Cross 生成的函数格式规律：顶格 "type name(params)\n{"，末尾顶格 "}"
-        {
-            static const std::regex funcDefRe(
-                R"(^(float[2-4]?|int[2-4]?|uint[2-4]?|bool|half[2-4]?)\s+(\w+)\s*\([^)]*\)\s*$)");
-            std::string result;
-            result.reserve(hlsl.size() + 256);
-            std::istringstream stream(hlsl);
-            std::string line;
-            std::string pendingReturnType;  // 非空表示上一个函数需要兜底 return
-            int braceDepth = 0;
-            bool inNonVoidFunc = false;
-
-            while (std::getline(stream, line)) {
-                // 检测函数定义
-                std::smatch m;
-                if (std::regex_match(line, m, funcDefRe)) {
-                    pendingReturnType = m[1].str();
-                    inNonVoidFunc = false;
-                    braceDepth = 0;
-                }
-
-                // 跟踪大括号深度
-                for (char c : line) {
-                    if (c == '{') {
-                        if (!pendingReturnType.empty() && braceDepth == 0) {
-                            inNonVoidFunc = true;
-                        }
-                        braceDepth++;
-                    } else if (c == '}') {
-                        braceDepth--;
-                        if (inNonVoidFunc && braceDepth == 0) {
-                            // 函数结束——在 } 前插入兜底 return
-                            std::string defaultVal = "0";
-                            if (pendingReturnType.find("2") != std::string::npos) defaultVal = "0.0f.xx";
-                            else if (pendingReturnType.find("3") != std::string::npos) defaultVal = "0.0f.xxx";
-                            else if (pendingReturnType.find("4") != std::string::npos) defaultVal = "0.0f.xxxx";
-                            else defaultVal = "0.0f";
-                            result += "    return " + defaultVal + ";\n";
-                            inNonVoidFunc = false;
-                            pendingReturnType.clear();
-                        }
-                    }
-                }
-
-                result += line + "\n";
-            }
-            hlsl = std::move(result);
-        }
-
-        // 后处理：为所有 for/while 循环添加 [loop] 属性
-        // 防止 D3D11 HLSL 编译器展开含 gradient 指令（ddx/ddy）的大循环时报
-        // X3511 "unable to unroll loop" 错误（如 a_tiny_plane 的 75 次 ray march 循环）
-        {
-            static const std::regex loopRe(R"(^(\s+)(for|while)\s*\()");
-            std::string result;
-            result.reserve(hlsl.size() + 512);
-            std::istringstream stream(hlsl);
-            std::string line;
-            while (std::getline(stream, line)) {
-                std::smatch m;
-                if (std::regex_search(line, m, loopRe)) {
-                    // 在循环行前插入 [loop] 属性，保持相同缩进
-                    result += m[1].str() + "[loop]\n";
-                }
-                result += line + "\n";
-            }
-            hlsl = std::move(result);
-        }
+        // 通过 FixupPipeline 按顺序执行所有 HLSL 后处理修复
+        static HlslFixupPipeline fixupPipeline = CreateDefaultFixupPipeline();
+        HlslFixupContext fixupCtx;
+        fixupCtx.flipFragCoordY = flipFragCoordY;
+        hlsl = fixupPipeline.run(std::move(hlsl), fixupCtx);
 
         return hlsl;
     } catch (const spirv_cross::CompilerError& e) {

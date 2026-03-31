@@ -141,6 +141,7 @@ set(SOURCES
     src/shader_project.cpp
     src/file_dialog.cpp
     src/glsl_to_hlsl.cpp
+    src/hlsl_fixup.cpp
     src/d3d11_renderer.cpp
     src/d3d11_shader_manager.cpp
     src/d3d11_texture_manager.cpp
