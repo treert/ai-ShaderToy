@@ -2011,10 +2011,15 @@ int main(int argc, char* argv[]) {
                                                  config.width, config.height);
                 } else {
                     d3dMultiPass->SetImageTargetRTV(nullptr);
+                    // 先渲染 Buffer passes（会改变 RTV 到各自的 FBO）
+                    ctx->VSSetShader(d3dRenderer->GetFullscreenVS(), nullptr, 0);
+                    d3dMultiPass->RenderBufferPasses(ctx, currentTime, timeDelta, frameCount,
+                                                      mouse, date, config.width, config.height, clickTime);
+                    // 重设 back buffer RTV，再渲染 Image pass
                     d3dRenderer->BeginFrame(0);
                     ctx->VSSetShader(d3dRenderer->GetFullscreenVS(), nullptr, 0);
-                    d3dMultiPass->RenderAllPasses(ctx, currentTime, timeDelta, frameCount,
-                                                   mouse, date, config.width, config.height, clickTime);
+                    d3dMultiPass->RenderImagePass(ctx, currentTime, timeDelta, frameCount,
+                                                    mouse, date, config.width, config.height, clickTime);
                 }
 
                 // DebugUI 渲染
