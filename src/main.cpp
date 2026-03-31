@@ -42,8 +42,8 @@
 #endif
 
 // 默认参数
-static const int    kDefaultWidth  = 800;
-static const int    kDefaultHeight = 600;
+static const int    kDefaultWidth  = 1280;
+static const int    kDefaultHeight = 720;
 static const char*  kDefaultShader = "assets/shaders/default.glsl";
 static const char*  kWindowTitle   = "ShaderToy Desktop";
 
@@ -1073,6 +1073,18 @@ int main(int argc, char* argv[]) {
     std::cout << "Shader loaded: " << config.shaderPath
               << (projData.isMultiPass ? " (multi-pass)" : " (single-pass)") << std::endl;
 
+    // 窗口标题更新（显示渲染后端和 shader 名称）
+    auto updateWindowTitle = [&]() {
+        if (config.wallpaperMode || !window) return;
+        namespace fs = std::filesystem;
+        fs::path sp(config.shaderPath);
+        std::string name = fs::is_directory(sp) ? sp.filename().string() : sp.filename().string();
+        std::string backend = useD3D11 ? "D3D11" : "OpenGL";
+        std::string title = std::string(kWindowTitle) + " [" + backend + "] - " + name;
+        SDL_SetWindowTitle(window, title.c_str());
+    };
+    updateWindowTitle();
+
     // HLSL 翻译输出 lambda（热加载时复用）
     auto dumpHlsl = [&]() {
 #ifdef _WIN32
@@ -1667,6 +1679,7 @@ int main(int argc, char* argv[]) {
                         lastShaderError.clear();
                         std::cout << "D3D11 Shader reloaded successfully." << std::endl;
                         dumpHlsl();
+                        updateWindowTitle();
                         if (config.wallpaperMode) {
                             tray.SetShaderList(debugState.glslFiles, debugState.jsonFiles,
                                                debugState.dirFiles, config.shaderPath);
@@ -1685,6 +1698,7 @@ int main(int argc, char* argv[]) {
                         lastShaderError.clear();
                         std::cout << "Shader reloaded successfully." << std::endl;
                         dumpHlsl();
+                        updateWindowTitle();
                         if (config.wallpaperMode) {
                             tray.SetShaderList(debugState.glslFiles, debugState.jsonFiles,
                                                debugState.dirFiles, config.shaderPath);
