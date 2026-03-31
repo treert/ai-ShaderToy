@@ -166,6 +166,7 @@ static bool CompileGlslToSpirv(const std::string& glslSource,
 
 /// SPIRV-Cross 反编译 SPIR-V → HLSL
 static std::string CrossCompileToHlsl(const std::vector<uint32_t>& spirv,
+                                       bool flipFragCoordY,
                                        std::string& errorsOut) {
     try {
         spirv_cross::CompilerHLSL compiler(spirv);
@@ -249,11 +250,9 @@ static std::string CrossCompileToHlsl(const std::vector<uint32_t>& spirv,
 
         // 后处理：D3D11 SV_Position.y 是 top-down（top=0.5, bottom=H-0.5）
         // 而 OpenGL gl_FragCoord.y 是 bottom-up（bottom=0.5, top=H-0.5）
-        // SPIRV-Cross 生成的 main() 中固定有：
-        //   gl_FragCoord = stage_input.gl_FragCoord;
-        //   gl_FragCoord.w = 1.0 / gl_FragCoord.w;
-        // 在 .w 修正之后插入 Y 翻转
-        {
+        // Image pass 需要翻转（最终输出到屏幕），Buffer pass 不翻转
+        // （Buffer pass 不翻转时 texelFetch(ivec2(fragCoord)) 坐标和 RTV 一致）
+        if (flipFragCoordY) {
             const std::string wLine = "gl_FragCoord.w = 1.0 / gl_FragCoord.w;";
             size_t wPos = hlsl.find(wLine);
             if (wPos != std::string::npos) {
@@ -411,6 +410,7 @@ std::string TranslateGlslToFullHlsl(
     const std::array<ChannelType, 4>& channelTypes,
     const std::string& commonSource,
     bool isCubeMapPass,
+    bool flipFragCoordY,
     std::string* outErrors)
 {
     std::string errors;
@@ -427,7 +427,7 @@ std::string TranslateGlslToFullHlsl(
     }
 
     // 3. SPIRV-Cross 反编译为 HLSL
-    std::string hlsl = CrossCompileToHlsl(spirv, errors);
+    std::string hlsl = CrossCompileToHlsl(spirv, flipFragCoordY, errors);
     if (hlsl.empty()) {
         if (outErrors) *outErrors = errors;
         std::cerr << errors << std::endl;
@@ -449,9 +449,10 @@ std::string TranslateGlslToFullHlsl(
     const std::array<ChannelType, 4>& channelTypes,
     const std::string& commonSource,
     bool isCubeMapPass,
+    bool flipFragCoordY,
     std::string* outErrors)
 {
-    // 降级到旧翻译器
+    // 降级到旧翻译器（旧翻译器在 PS 入口中已硬编码 Y 翻转，暂不支持条件翻转）
     std::string translated = TranslateGlslToHlsl(glslSource);
     return WrapShaderToyHlsl(translated, channelTypes, commonSource, isCubeMapPass);
 }

@@ -182,6 +182,7 @@ int D3D11MultiPass::AddBufferPass(const std::string& name, const std::string& so
     pass.shader.SetDevice(device_, context_);
     pass.shader.SetChannelTypes(channelTypes);
     pass.shader.SetCommonSource(commonSource_);
+    pass.shader.SetFlipFragCoordY(false);  // Buffer pass 不翻转 Y（保持 D3D11 原生 top-down）
     if (!pass.shader.LoadFromSource(source)) {
         lastError_ = "Failed to compile " + name + ": " + pass.shader.GetLastError();
         return -1;
@@ -227,6 +228,7 @@ bool D3D11MultiPass::SetCubeMapPass(const std::string& source, const std::array<
     cubeMapPass_.shader.SetChannelTypes(channelTypes);
     cubeMapPass_.shader.SetCommonSource(commonSource_);
     cubeMapPass_.shader.SetCubeMapPassMode(true);
+    cubeMapPass_.shader.SetFlipFragCoordY(false);  // CubeMap pass 不翻转 Y
     if (!cubeMapPass_.shader.LoadFromSource(source)) {
         lastError_ = "Failed to compile Cube A: " + cubeMapPass_.shader.GetLastError();
         return false;

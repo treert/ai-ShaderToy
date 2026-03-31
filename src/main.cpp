@@ -290,6 +290,7 @@ static int TranslateAndDumpHlsl(const ShaderProjectData& data,
                         const std::string& fileName,
                         const std::array<ChannelType, 4>& chTypes,
                         bool isCubeMap,
+                        bool flipFragCoordY = true,
                         const std::string& passName = "") {
         // 构造来源注释头
         std::string header;
@@ -304,6 +305,7 @@ static int TranslateAndDumpHlsl(const ShaderProjectData& data,
         std::string translateErrors;
         std::string fullHlsl = TranslateGlslToFullHlsl(passCode, chTypes,
                                                          data.commonSource, isCubeMap,
+                                                         flipFragCoordY,
                                                          &translateErrors);
 
         if (fullHlsl.empty()) {
@@ -352,7 +354,7 @@ static int TranslateAndDumpHlsl(const ShaderProjectData& data,
 
     if (!isMulti) {
         auto chTypes = getChannelTypes(data.imagePass);
-        dumpPass(data.imagePass.code, shaderName + ".hlsl", chTypes, false, "Image");
+        dumpPass(data.imagePass.code, shaderName + ".hlsl", chTypes, false, true, "Image");
     } else {
         // Common 段
         if (!data.commonSource.empty()) {
@@ -371,7 +373,7 @@ static int TranslateAndDumpHlsl(const ShaderProjectData& data,
         // CubeMap pass
         if (data.hasCubeMapPass) {
             auto chTypes = getChannelTypes(data.cubeMapPass);
-            dumpPass(data.cubeMapPass.code, "cube_a.hlsl", chTypes, true, "Cube A");
+            dumpPass(data.cubeMapPass.code, "cube_a.hlsl", chTypes, true, false, "Cube A");
         }
 
         // Buffer passes
@@ -381,13 +383,13 @@ static int TranslateAndDumpHlsl(const ShaderProjectData& data,
             fname += static_cast<char>('a' + bi);
             fname += ".hlsl";
             auto chTypes = getChannelTypes(bp);
-            dumpPass(bp.code, fname, chTypes, false, bp.name);
+            dumpPass(bp.code, fname, chTypes, false, false, bp.name);
         }
 
         // Image pass
         {
             auto chTypes = getChannelTypes(data.imagePass);
-            dumpPass(data.imagePass.code, "image.hlsl", chTypes, false, "Image");
+            dumpPass(data.imagePass.code, "image.hlsl", chTypes, false, true, "Image");
         }
     }
 

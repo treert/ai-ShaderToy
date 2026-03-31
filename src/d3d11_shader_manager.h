@@ -55,6 +55,9 @@ public:
     /// 设置是否为 CubeMap pass
     void SetCubeMapPassMode(bool isCubeMap);
 
+    /// 设置是否翻转 gl_FragCoord.y（Image pass = true，Buffer pass = false）
+    void SetFlipFragCoordY(bool flip);
+
     /// 从 GLSL 源码加载（内部翻译为 HLSL 并编译）
     bool LoadFromSource(const std::string& glslSource);
 
@@ -92,6 +95,7 @@ private:
     std::string lastError_;
     std::string commonSource_;
     bool isCubeMapPass_ = false;
+    bool flipFragCoordY_ = true;  // Image pass = true, Buffer pass = false
     std::array<ChannelType, 4> channelTypes_ = {
         ChannelType::Texture2D, ChannelType::Texture2D,
         ChannelType::Texture2D, ChannelType::Texture2D

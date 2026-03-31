@@ -17,6 +17,7 @@ D3D11ShaderManager::D3D11ShaderManager(D3D11ShaderManager&& other) noexcept
       lastError_(std::move(other.lastError_)),
       commonSource_(std::move(other.commonSource_)),
       isCubeMapPass_(other.isCubeMapPass_),
+      flipFragCoordY_(other.flipFragCoordY_),
       channelTypes_(other.channelTypes_) {
     other.device_ = nullptr;
     other.context_ = nullptr;
@@ -31,6 +32,7 @@ D3D11ShaderManager& D3D11ShaderManager::operator=(D3D11ShaderManager&& other) no
         lastError_ = std::move(other.lastError_);
         commonSource_ = std::move(other.commonSource_);
         isCubeMapPass_ = other.isCubeMapPass_;
+        flipFragCoordY_ = other.flipFragCoordY_;
         channelTypes_ = other.channelTypes_;
         other.device_ = nullptr;
         other.context_ = nullptr;
@@ -55,6 +57,10 @@ void D3D11ShaderManager::SetCubeMapPassMode(bool isCubeMap) {
     isCubeMapPass_ = isCubeMap;
 }
 
+void D3D11ShaderManager::SetFlipFragCoordY(bool flip) {
+    flipFragCoordY_ = flip;
+}
+
 std::string D3D11ShaderManager::WrapShaderToyHlsl(const std::string& translatedHlsl) const {
     return ::WrapShaderToyHlsl(translatedHlsl, channelTypes_, commonSource_, isCubeMapPass_);
 }
@@ -72,6 +78,7 @@ bool D3D11ShaderManager::LoadFromSource(const std::string& glslSource) {
     std::string translateErrors;
     std::string fullHlsl = TranslateGlslToFullHlsl(glslSource, channelTypes_,
                                                      commonSource_, isCubeMapPass_,
+                                                     flipFragCoordY_,
                                                      &translateErrors);
     if (fullHlsl.empty()) {
         lastError_ = "GLSL->HLSL translation failed:\n" + translateErrors;
