@@ -61,6 +61,14 @@ public:
     /// 从 GLSL 源码加载（内部翻译为 HLSL 并编译）
     bool LoadFromSource(const std::string& glslSource);
 
+    /// 从 HLSL 源码直接编译（HLSL 原生模式，跳过翻译）
+    /// @param hlslSource 完整的 HLSL 源码（用户需 #include "shadertoy_uniforms.hlsl"）
+    /// @param shaderDir  shader 文件所在目录（用于 #include 查找）
+    /// @param assetsDir  assets 目录路径（用于查找头文件模板）
+    bool LoadFromHlsl(const std::string& hlslSource,
+                      const std::string& shaderDir,
+                      const std::string& assetsDir);
+
     /// 激活 pixel shader 并绑定 constant buffer
     void Use();
 

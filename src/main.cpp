@@ -792,6 +792,15 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // HLSL 原生模式必须搭配 --d3d11
+    if (project.GetData().isHlsl && !useD3D11) {
+        std::cerr << "Error: HLSL native shader requires --d3d11 mode." << std::endl;
+        SDL_GL_DeleteContext(glContext);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
+    }
+
     // ============================================================
     // 加载纹理
     // ============================================================
@@ -963,6 +972,16 @@ int main(int argc, char* argv[]) {
         d3dMultiPass->Init(config.width, config.height);
         d3dMultiPass->SetCommonSource(data.commonSource);
 
+        // HLSL 原生模式需要的路径
+        const bool hlsl = data.isHlsl;
+        std::string shaderDir, assetsDir;
+        if (hlsl) {
+            namespace fs = std::filesystem;
+            fs::path sp(config.shaderPath);
+            shaderDir = fs::is_directory(sp) ? sp.string() : sp.parent_path().string();
+            assetsDir = "assets";  // 相对于工作目录
+        }
+
         // resolveChannels 与 OpenGL 版本相同
         auto resolveChannels = [](const PassData& pass,
                                   std::array<int, 4>& inputs,
@@ -1000,17 +1019,20 @@ int main(int argc, char* argv[]) {
         if (data.hasCubeMapPass) {
             std::array<int, 4> inputs; std::array<ChannelType, 4> chTypes;
             resolveChannels(data.cubeMapPass, inputs, chTypes);
-            if (!d3dMultiPass->SetCubeMapPass(data.cubeMapPass.code, inputs, chTypes)) return false;
+            if (!d3dMultiPass->SetCubeMapPass(data.cubeMapPass.code, inputs, chTypes, 1024,
+                                               hlsl, shaderDir, assetsDir)) return false;
         }
         for (const auto& bp : data.bufferPasses) {
             std::array<int, 4> inputs; std::array<ChannelType, 4> chTypes;
             resolveChannels(bp, inputs, chTypes);
-            if (d3dMultiPass->AddBufferPass(bp.name, bp.code, inputs, chTypes) < 0) return false;
+            if (d3dMultiPass->AddBufferPass(bp.name, bp.code, inputs, chTypes,
+                                             hlsl, shaderDir, assetsDir) < 0) return false;
         }
         {
             std::array<int, 4> inputs; std::array<ChannelType, 4> chTypes;
             resolveChannels(data.imagePass, inputs, chTypes);
-            if (!d3dMultiPass->SetImagePass(data.imagePass.code, inputs, chTypes)) return false;
+            if (!d3dMultiPass->SetImagePass(data.imagePass.code, inputs, chTypes,
+                                             hlsl, shaderDir, assetsDir)) return false;
         }
         return true;
     };
@@ -1058,8 +1080,10 @@ int main(int argc, char* argv[]) {
     if (useD3D11) {
         LoadD3D11TexturesForProject(projData);
 
-        // HLSL 翻译输出：先 dump 再 setup，确保编译失败也能输出 HLSL 方便调试
-        {
+        // HLSL 原生模式不需要翻译 dump
+        if (!projData.isHlsl) {
+            // HLSL 翻译输出：先 dump 再 setup，确保编译失败也能输出 HLSL 方便调试
+            {
             namespace fs = std::filesystem;
             std::string sName = GetShaderDumpName(config.shaderPath);
             std::string subDir = config.wallpaperMode ? "wallpaper-mode" : "window-mode";
@@ -1070,6 +1094,7 @@ int main(int argc, char* argv[]) {
                 std::cerr << "WARNING: " << errors << " pass(es) had HLSL compile errors." << std::endl;
             }
         }
+        } // end if (!projData.isHlsl)
 
         if (!SetupD3D11MultiPass(projData)) {
             std::cerr << "Failed to setup D3D11 multi-pass: "

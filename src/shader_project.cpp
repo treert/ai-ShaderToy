@@ -68,8 +68,12 @@ bool ShaderProject::Load(const std::string& path) {
     if (ext == ".json") {
         return LoadFromJSON(path);
     } else {
-        // 默认作为单文件 .glsl
-        return LoadSingleFile(path);
+        // .glsl 和 .hlsl 都作为单文件加载
+        bool ok = LoadSingleFile(path);
+        if (ok && ext == ".hlsl") {
+            data_.isHlsl = true;
+        }
+        return ok;
     }
 }
 
@@ -322,28 +326,40 @@ bool ShaderProject::LoadFromDirectory(const std::string& dirPath) {
         return ss.str();
     };
 
-    // image.glsl (必须)
-    fs::path imagePath = dir / "image.glsl";
-    if (!fs::exists(imagePath)) {
-        lastError_ = "Directory mode: missing required 'image.glsl' in " + dirPath;
+    // image.glsl 或 image.hlsl (必须有其一)
+    fs::path imagePathGlsl = dir / "image.glsl";
+    fs::path imagePathHlsl = dir / "image.hlsl";
+    bool isHlslDir = false;
+
+    if (fs::exists(imagePathHlsl)) {
+        isHlslDir = true;
+        data_.imagePass.name = "Image";
+        data_.imagePass.code = readFileContent(imagePathHlsl);
+        allFiles_.push_back(imagePathHlsl.string());
+    } else if (fs::exists(imagePathGlsl)) {
+        data_.imagePass.name = "Image";
+        data_.imagePass.code = readFileContent(imagePathGlsl);
+        allFiles_.push_back(imagePathGlsl.string());
+    } else {
+        lastError_ = "Directory mode: missing required 'image.glsl' or 'image.hlsl' in " + dirPath;
         return false;
     }
-    data_.imagePass.name = "Image";
-    data_.imagePass.code = readFileContent(imagePath);
-    allFiles_.push_back(imagePath.string());
 
-    // common.glsl (可选)
-    fs::path commonPath = dir / "common.glsl";
+    data_.isHlsl = isHlslDir;
+    const char* shaderExt = isHlslDir ? ".hlsl" : ".glsl";
+
+    // common.glsl / common.hlsl (可选)
+    fs::path commonPath = dir / (std::string("common") + shaderExt);
     if (fs::exists(commonPath)) {
         data_.commonSource = readFileContent(commonPath);
         allFiles_.push_back(commonPath.string());
     }
 
     // Buffer A~D (可选)
-    const char* bufferFileNames[] = {"buf_a.glsl", "buf_b.glsl", "buf_c.glsl", "buf_d.glsl"};
+    const char* bufferBaseNames[] = {"buf_a", "buf_b", "buf_c", "buf_d"};
     const char* bufferNames[] = {"Buffer A", "Buffer B", "Buffer C", "Buffer D"};
     for (int i = 0; i < 4; ++i) {
-        fs::path bufPath = dir / bufferFileNames[i];
+        fs::path bufPath = dir / (std::string(bufferBaseNames[i]) + shaderExt);
         if (fs::exists(bufPath)) {
             PassData pass;
             pass.name = bufferNames[i];
@@ -355,8 +371,8 @@ bool ShaderProject::LoadFromDirectory(const std::string& dirPath) {
 
     data_.isMultiPass = !data_.bufferPasses.empty();
 
-    // cube_a.glsl (可选, CubeMap pass)
-    fs::path cubeAPath = dir / "cube_a.glsl";
+    // cube_a.glsl / cube_a.hlsl (可选, CubeMap pass)
+    fs::path cubeAPath = dir / (std::string("cube_a") + shaderExt);
     if (fs::exists(cubeAPath)) {
         data_.cubeMapPass.name = "Cube A";
         data_.cubeMapPass.code = readFileContent(cubeAPath);

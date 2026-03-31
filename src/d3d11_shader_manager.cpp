@@ -5,6 +5,57 @@
 #include <d3dcompiler.h>
 #include <iostream>
 #include <sstream>
+#include <fstream>
+#include <filesystem>
+
+namespace fs = std::filesystem;
+
+// ============================================================
+// ShaderIncludeHandler — ID3DInclude 实现，支持 #include 查找
+// ============================================================
+
+class ShaderIncludeHandler : public ID3DInclude {
+public:
+    ShaderIncludeHandler(const std::string& shaderDir, const std::string& assetsDir)
+        : shaderDir_(shaderDir), assetsDir_(assetsDir) {}
+
+    HRESULT __stdcall Open(D3D_INCLUDE_TYPE /*type*/, LPCSTR pFileName,
+                            LPCVOID /*pParentData*/, LPCVOID* ppData, UINT* pBytes) override {
+        // 按优先级查找：1. shader 目录 2. assets 目录
+        std::string searchPaths[] = {
+            shaderDir_ + "/" + pFileName,
+            assetsDir_ + "/" + pFileName,
+        };
+
+        for (const auto& path : searchPaths) {
+            std::ifstream file(path, std::ios::binary);
+            if (file.is_open()) {
+                file.seekg(0, std::ios::end);
+                size_t size = static_cast<size_t>(file.tellg());
+                file.seekg(0, std::ios::beg);
+
+                char* data = new char[size];
+                file.read(data, size);
+
+                *ppData = data;
+                *pBytes = static_cast<UINT>(size);
+                return S_OK;
+            }
+        }
+
+        std::cerr << "ShaderIncludeHandler: file not found: " << pFileName << std::endl;
+        return E_FAIL;
+    }
+
+    HRESULT __stdcall Close(LPCVOID pData) override {
+        delete[] static_cast<const char*>(pData);
+        return S_OK;
+    }
+
+private:
+    std::string shaderDir_;
+    std::string assetsDir_;
+};
 
 D3D11ShaderManager::D3D11ShaderManager() = default;
 
@@ -120,6 +171,85 @@ bool D3D11ShaderManager::LoadFromSource(const std::string& glslSource) {
 
         // 输出完整的 HLSL 源码以便调试
         std::cerr << "=== Full HLSL source ===\n" << fullHlsl << "\n=== End HLSL ===\n";
+        return false;
+    }
+
+    // 创建 Pixel Shader
+    hr = device_->CreatePixelShader(
+        shaderBlob->GetBufferPointer(),
+        shaderBlob->GetBufferSize(),
+        nullptr,
+        &pixelShader_
+    );
+
+    if (FAILED(hr)) {
+        lastError_ = "CreatePixelShader failed.";
+        return false;
+    }
+
+    // 创建 Constant Buffer（如果还没有）
+    if (!constantBuffer_) {
+        D3D11_BUFFER_DESC cbDesc = {};
+        cbDesc.ByteWidth = sizeof(ShaderToyConstants);
+        cbDesc.Usage = D3D11_USAGE_DYNAMIC;
+        cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+        hr = device_->CreateBuffer(&cbDesc, nullptr, &constantBuffer_);
+        if (FAILED(hr)) {
+            lastError_ = "CreateBuffer for constant buffer failed.";
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool D3D11ShaderManager::LoadFromHlsl(const std::string& hlslSource,
+                                       const std::string& shaderDir,
+                                       const std::string& assetsDir) {
+    if (!device_) {
+        lastError_ = "D3D11 device not set.";
+        return false;
+    }
+
+    // 释放旧资源
+    pixelShader_.Reset();
+
+    // 直接编译 HLSL（跳过 GLSL→HLSL 翻译）
+    ComPtr<ID3D10Blob> shaderBlob;
+    ComPtr<ID3D10Blob> errorBlob;
+
+    UINT compileFlags = 0;
+#ifdef _DEBUG
+    compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#else
+    compileFlags |= D3DCOMPILE_OPTIMIZATION_LEVEL3;
+#endif
+
+    ShaderIncludeHandler includeHandler(shaderDir, assetsDir);
+
+    HRESULT hr = D3DCompile(
+        hlslSource.c_str(),
+        hlslSource.size(),
+        "ShaderToyPS_HLSL",
+        nullptr,            // defines
+        &includeHandler,    // includes — 支持 #include
+        "main",
+        "ps_5_0",
+        compileFlags,
+        0,
+        &shaderBlob,
+        &errorBlob
+    );
+
+    if (FAILED(hr)) {
+        lastError_ = "HLSL compilation error:\n";
+        if (errorBlob) {
+            lastError_ += static_cast<const char*>(errorBlob->GetBufferPointer());
+        }
+        std::cerr << lastError_ << std::endl;
+        std::cerr << "=== Full HLSL source ===\n" << hlslSource << "\n=== End HLSL ===\n";
         return false;
     }
 

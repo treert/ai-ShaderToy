@@ -78,15 +78,24 @@ public:
     /// 添加 Buffer pass
     int AddBufferPass(const std::string& name, const std::string& source,
                       const std::array<int, 4>& inputs,
-                      const std::array<ChannelType, 4>& channelTypes);
+                      const std::array<ChannelType, 4>& channelTypes,
+                      bool isHlsl = false,
+                      const std::string& shaderDir = "",
+                      const std::string& assetsDir = "");
 
     /// 设置 Image pass
     bool SetImagePass(const std::string& source, const std::array<int, 4>& inputs,
-                      const std::array<ChannelType, 4>& channelTypes);
+                      const std::array<ChannelType, 4>& channelTypes,
+                      bool isHlsl = false,
+                      const std::string& shaderDir = "",
+                      const std::string& assetsDir = "");
 
     /// 设置 CubeMap pass
     bool SetCubeMapPass(const std::string& source, const std::array<int, 4>& inputs,
-                        const std::array<ChannelType, 4>& channelTypes, int cubeSize = 1024);
+                        const std::array<ChannelType, 4>& channelTypes, int cubeSize = 1024,
+                        bool isHlsl = false,
+                        const std::string& shaderDir = "",
+                        const std::string& assetsDir = "");
 
     /// 设置 Image pass 目标 RTV（nullptr = 渲染到 SwapChain back buffer）
     void SetImageTargetRTV(ID3D11RenderTargetView* rtv, int width = 0, int height = 0);

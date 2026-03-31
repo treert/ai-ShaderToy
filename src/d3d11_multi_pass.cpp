@@ -172,7 +172,10 @@ bool D3D11MultiPass::CreateCubeMapFBO(D3D11RenderPass& pass, int cubeSize) {
 
 int D3D11MultiPass::AddBufferPass(const std::string& name, const std::string& source,
                                    const std::array<int, 4>& inputs,
-                                   const std::array<ChannelType, 4>& channelTypes) {
+                                   const std::array<ChannelType, 4>& channelTypes,
+                                   bool isHlsl,
+                                   const std::string& shaderDir,
+                                   const std::string& assetsDir) {
     D3D11RenderPass pass;
     pass.name = name;
     pass.shaderSource = source;
@@ -183,7 +186,11 @@ int D3D11MultiPass::AddBufferPass(const std::string& name, const std::string& so
     pass.shader.SetChannelTypes(channelTypes);
     pass.shader.SetCommonSource(commonSource_);
     pass.shader.SetFlipFragCoordY(false);  // Buffer pass 不翻转 Y（保持 D3D11 原生 top-down）
-    if (!pass.shader.LoadFromSource(source)) {
+
+    bool compileOk = isHlsl
+        ? pass.shader.LoadFromHlsl(source, shaderDir, assetsDir)
+        : pass.shader.LoadFromSource(source);
+    if (!compileOk) {
         lastError_ = "Failed to compile " + name + ": " + pass.shader.GetLastError();
         return -1;
     }
@@ -197,7 +204,10 @@ int D3D11MultiPass::AddBufferPass(const std::string& name, const std::string& so
 }
 
 bool D3D11MultiPass::SetImagePass(const std::string& source, const std::array<int, 4>& inputs,
-                                   const std::array<ChannelType, 4>& channelTypes) {
+                                   const std::array<ChannelType, 4>& channelTypes,
+                                   bool isHlsl,
+                                   const std::string& shaderDir,
+                                   const std::string& assetsDir) {
     imagePass_ = D3D11RenderPass{};
     imagePass_.name = "Image";
     imagePass_.shaderSource = source;
@@ -207,7 +217,11 @@ bool D3D11MultiPass::SetImagePass(const std::string& source, const std::array<in
     imagePass_.shader.SetDevice(device_, context_);
     imagePass_.shader.SetChannelTypes(channelTypes);
     imagePass_.shader.SetCommonSource(commonSource_);
-    if (!imagePass_.shader.LoadFromSource(source)) {
+
+    bool compileOk = isHlsl
+        ? imagePass_.shader.LoadFromHlsl(source, shaderDir, assetsDir)
+        : imagePass_.shader.LoadFromSource(source);
+    if (!compileOk) {
         lastError_ = "Failed to compile Image pass: " + imagePass_.shader.GetLastError();
         return false;
     }
@@ -216,7 +230,10 @@ bool D3D11MultiPass::SetImagePass(const std::string& source, const std::array<in
 }
 
 bool D3D11MultiPass::SetCubeMapPass(const std::string& source, const std::array<int, 4>& inputs,
-                                     const std::array<ChannelType, 4>& channelTypes, int cubeSize) {
+                                     const std::array<ChannelType, 4>& channelTypes, int cubeSize,
+                                     bool isHlsl,
+                                     const std::string& shaderDir,
+                                     const std::string& assetsDir) {
     cubeMapPass_ = D3D11RenderPass{};
     cubeMapPass_.name = "Cube A";
     cubeMapPass_.shaderSource = source;
@@ -229,7 +246,11 @@ bool D3D11MultiPass::SetCubeMapPass(const std::string& source, const std::array<
     cubeMapPass_.shader.SetCommonSource(commonSource_);
     cubeMapPass_.shader.SetCubeMapPassMode(true);
     cubeMapPass_.shader.SetFlipFragCoordY(false);  // CubeMap pass 不翻转 Y
-    if (!cubeMapPass_.shader.LoadFromSource(source)) {
+
+    bool compileOk = isHlsl
+        ? cubeMapPass_.shader.LoadFromHlsl(source, shaderDir, assetsDir)
+        : cubeMapPass_.shader.LoadFromSource(source);
+    if (!compileOk) {
         lastError_ = "Failed to compile Cube A: " + cubeMapPass_.shader.GetLastError();
         return false;
     }

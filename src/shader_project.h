@@ -33,6 +33,7 @@ struct ShaderProjectData {
     PassData cubeMapPass;                   // Cube A pass（可选，渲染到 samplerCube）
     bool hasCubeMapPass = false;            // 是否有 Cube A pass
     bool isMultiPass = false;               // 是否有 buffer pass
+    bool isHlsl = false;                    // 是否为 HLSL 原生模式（跳过翻译）
 
     /// 获取所有外部纹理路径（去重）
     std::vector<std::string> GetExternalTexturePaths() const;
