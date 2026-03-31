@@ -1243,9 +1243,19 @@ int main(int argc, char* argv[]) {
         debugState.renderScale = config.renderScale;
     } else if (config.showDebug) {
         // 壁纸模式 + --debug：初始化 ImGui 用于只读叠加显示
-        if (!debugUI.Init(wallpaperWindows[0].window, glContext)) {
-            std::cerr << "DebugUI init failed (wallpaper mode), continuing without debug overlay." << std::endl;
-            config.showDebug = false;
+#ifdef _WIN32
+        if (useD3D11 && d3dRenderer) {
+            if (!debugUI.InitD3D11(wallpaperWindows[0].window, d3dRenderer->GetDevice(), d3dRenderer->GetContext())) {
+                std::cerr << "DebugUI D3D11 init failed (wallpaper mode), continuing without debug overlay." << std::endl;
+                config.showDebug = false;
+            }
+        } else
+#endif
+        {
+            if (!debugUI.Init(wallpaperWindows[0].window, glContext)) {
+                std::cerr << "DebugUI init failed (wallpaper mode), continuing without debug overlay." << std::endl;
+                config.showDebug = false;
+            }
         }
     }
 
@@ -1658,9 +1668,19 @@ int main(int argc, char* argv[]) {
             config.showDebug = !config.showDebug;
             // 首次开启时延迟初始化 ImGui
             if (config.showDebug && !debugUI.IsInitialized()) {
-                if (!debugUI.Init(wallpaperWindows[0].window, glContext)) {
-                    std::cerr << "DebugUI init failed, disabling debug overlay." << std::endl;
-                    config.showDebug = false;
+#ifdef _WIN32
+                if (useD3D11 && d3dRenderer) {
+                    if (!debugUI.InitD3D11(wallpaperWindows[0].window, d3dRenderer->GetDevice(), d3dRenderer->GetContext())) {
+                        std::cerr << "DebugUI D3D11 init failed, disabling debug overlay." << std::endl;
+                        config.showDebug = false;
+                    }
+                } else
+#endif
+                {
+                    if (!debugUI.Init(wallpaperWindows[0].window, glContext)) {
+                        std::cerr << "DebugUI init failed, disabling debug overlay." << std::endl;
+                        config.showDebug = false;
+                    }
                 }
             }
             tray.SetDebugState(config.showDebug);
@@ -1739,15 +1759,32 @@ int main(int argc, char* argv[]) {
                 }
             } else {
                 if (config.showDebug) {
-                    for (auto& ww : wallpaperWindows) {
-                        SDL_GL_MakeCurrent(ww.window, glContext);
-                        fillDebugState(0.0f, lastFrameTime, 0.0f, 0.0f,
-                                       static_cast<float>(ww.width),
-                                       static_cast<float>(ww.height), mouse);
+#ifdef _WIN32
+                    if (useD3D11 && d3dRenderer) {
+                        for (auto& ww : wallpaperWindows) {
+                            fillDebugState(0.0f, lastFrameTime, 0.0f, 0.0f,
+                                           static_cast<float>(ww.width),
+                                           static_cast<float>(ww.height), mouse);
 
-                        debugUI.BeginFrame(ww.width, ww.height);
-                        debugUI.RenderOverlay(debugState);
-                        SDL_GL_SwapWindow(ww.window);
+                            d3dRenderer->BeginFrame(ww.d3dSwapChainIndex);
+                            debugUI.SetD3D11RenderTarget(d3dRenderer->GetBackBufferRTV(ww.d3dSwapChainIndex));
+                            debugUI.BeginFrame(ww.width, ww.height);
+                            debugUI.RenderOverlay(debugState);
+                            d3dRenderer->Present(ww.d3dSwapChainIndex, 0);
+                        }
+                    } else
+#endif
+                    {
+                        for (auto& ww : wallpaperWindows) {
+                            SDL_GL_MakeCurrent(ww.window, glContext);
+                            fillDebugState(0.0f, lastFrameTime, 0.0f, 0.0f,
+                                           static_cast<float>(ww.width),
+                                           static_cast<float>(ww.height), mouse);
+
+                            debugUI.BeginFrame(ww.width, ww.height);
+                            debugUI.RenderOverlay(debugState);
+                            SDL_GL_SwapWindow(ww.window);
+                        }
                     }
                 }
                 // 暂停时也更新 tooltip（显示 Paused 状态）
@@ -1904,6 +1941,16 @@ int main(int argc, char* argv[]) {
                         ctx->VSSetShader(d3dRenderer->GetFullscreenVS(), nullptr, 0);
                         d3dMultiPass->RenderImagePass(ctx, currentTime, timeDelta, frameCount,
                                                        localMouse, date, ww.width, ww.height, ww.clickTime);
+                    }
+
+                    if (config.showDebug) {
+                        fillDebugState(measuredFPS, currentTime, timeDelta, lastRenderElapsed,
+                                       static_cast<float>(ww.width),
+                                       static_cast<float>(ww.height), localMouse);
+
+                        debugUI.SetD3D11RenderTarget(d3dRenderer->GetBackBufferRTV(ww.d3dSwapChainIndex));
+                        debugUI.BeginFrame(ww.width, ww.height);
+                        debugUI.RenderOverlay(debugState);
                     }
 
                     d3dRenderer->Present(ww.d3dSwapChainIndex, 0);

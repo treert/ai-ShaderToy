@@ -83,7 +83,7 @@
 - [x] MultiPassRenderer 渲染流程拆分（RenderBufferPasses + RenderImagePass）
 - [x] Vulkan 迁移评估（结论：暂不迁移，ShaderToy 场景 GPU 瓶颈在 fragment shader 而非 API 开销）
 
-### 阶段 6：D3D11 壁纸后端 🔄 进行中
+### 阶段 6：D3D11 壁纸后端 ✅ 已完成
 **目标**：解决 Win11 24H2+ (Build 26200+) 壁纸模式黑屏问题（Progman 使用 WS_EX_NOREDIRECTIONBITMAP，OpenGL swap chain 不可见）
 - [x] D3D11Renderer（Device/Context/多 SwapChain 管理，全屏三角形 VS）
 - [x] GLSL-to-HLSL 翻译器（基于正则替换，后续可升级为 glslang + SPIRV-Cross）
@@ -94,8 +94,9 @@
 - [x] main.cpp 集成（壁纸模式使用 D3D11 路径，窗口模式保留 OpenGL）
 - [x] CMakeLists.txt 更新（d3d11/dxgi/d3dcompiler 链接）
 - [x] Debug 代码清理（移除红色 glClear 测试、drawable 日志）
-- [ ] 实机测试（Win11 24H2 壁纸模式验证）
+- [x] 实机测试（Win11 24H2 壁纸模式验证）
 - [x] 壁纸模式 DebugUI（ImGui D3D11 后端适配）
+- [x] 壁纸模式 D3D11 路径 DebugUI overlay 接入（--debug 参数 + 托盘切换，暂停/正常渲染均支持）
 - [x] SPIRV-Cross 升级（glslang + SPIRV-Cross 管线，翻译通过率 30/30 = 100%，旧正则翻译器保留为降级方案）
 - [x] --translate 翻译模式（GLSL→HLSL 翻译输出到 Logs 目录，单 pass 输出单文件，多 pass 输出到子目录）
 - [x] --translate 翻译模式编译验证（D3DCompile ps_5_0 验证每个 pass，错误信息输出到控制台和 .hlsl 文件末尾注释）
