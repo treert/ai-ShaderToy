@@ -1009,44 +1009,48 @@ int main(int argc, char* argv[]) {
         return true;
     };
 
-    if (useD3D11) {
-        // D3D11 纹理加载
-        if (d3dTextures) {
-            const auto& data = projData;
-            bool hasChannelBindings = false;
-            for (int i = 0; i < 4; ++i) {
-                if (data.imagePass.channels[i].source != ChannelBinding::Source::None) {
-                    hasChannelBindings = true; break;
-                }
-            }
-            if (!hasChannelBindings && !data.isMultiPass && data.commonSource.empty()) {
-                std::string channelPaths[4] = {config.channel0, config.channel1, config.channel2, config.channel3};
-                for (int i = 0; i < 4; ++i) {
-                    if (channelPaths[i].empty()) continue;
-                    if (config.channelTypes[i] == ChannelType::CubeMap)
-                        d3dTextures->LoadCubeMap(i, channelPaths[i]);
-                    else
-                        d3dTextures->LoadTexture(i, channelPaths[i]);
-                }
-            } else {
-                auto loadPassTex = [&](const PassData& pass) {
-                    for (int i = 0; i < 4; ++i) {
-                        const auto& ch = pass.channels[i];
-                        if (ch.source == ChannelBinding::Source::ExternalTexture && !ch.texturePath.empty()) {
-                            if (!d3dTextures->HasTexture(i)) {
-                                if (ch.textureType == ChannelType::CubeMap)
-                                    d3dTextures->LoadCubeMap(i, ch.texturePath);
-                                else
-                                    d3dTextures->LoadTexture(i, ch.texturePath);
-                            }
-                        }
-                    }
-                };
-                loadPassTex(data.imagePass);
-                for (const auto& bp : data.bufferPasses) loadPassTex(bp);
-                if (data.hasCubeMapPass) loadPassTex(data.cubeMapPass);
+    // D3D11 纹理加载辅助函数（初始加载和热加载复用）
+    auto LoadD3D11TexturesForProject = [&](const ShaderProjectData& data) {
+        if (!d3dTextures) return;
+        d3dTextures->Clear();
+
+        bool hasChannelBindings = false;
+        for (int i = 0; i < 4; ++i) {
+            if (data.imagePass.channels[i].source != ChannelBinding::Source::None) {
+                hasChannelBindings = true; break;
             }
         }
+        if (!hasChannelBindings && !data.isMultiPass && data.commonSource.empty()) {
+            std::string channelPaths[4] = {config.channel0, config.channel1, config.channel2, config.channel3};
+            for (int i = 0; i < 4; ++i) {
+                if (channelPaths[i].empty()) continue;
+                if (config.channelTypes[i] == ChannelType::CubeMap)
+                    d3dTextures->LoadCubeMap(i, channelPaths[i]);
+                else
+                    d3dTextures->LoadTexture(i, channelPaths[i]);
+            }
+        } else {
+            auto loadPassTex = [&](const PassData& pass) {
+                for (int i = 0; i < 4; ++i) {
+                    const auto& ch = pass.channels[i];
+                    if (ch.source == ChannelBinding::Source::ExternalTexture && !ch.texturePath.empty()) {
+                        if (!d3dTextures->HasTexture(i)) {
+                            if (ch.textureType == ChannelType::CubeMap)
+                                d3dTextures->LoadCubeMap(i, ch.texturePath);
+                            else
+                                d3dTextures->LoadTexture(i, ch.texturePath);
+                        }
+                    }
+                }
+            };
+            loadPassTex(data.imagePass);
+            for (const auto& bp : data.bufferPasses) loadPassTex(bp);
+            if (data.hasCubeMapPass) loadPassTex(data.cubeMapPass);
+        }
+    };
+
+    if (useD3D11) {
+        LoadD3D11TexturesForProject(projData);
 
         // HLSL 翻译输出：先 dump 再 setup，确保编译失败也能输出 HLSL 方便调试
         {
@@ -1695,8 +1699,7 @@ int main(int argc, char* argv[]) {
 #ifdef _WIN32
                 if (useD3D11) {
                     // D3D11 路径热加载
-                    if (d3dTextures) d3dTextures->Clear();
-                    // TODO: 重新加载 D3D11 纹理（类似 LoadTexturesForProject）
+                    LoadD3D11TexturesForProject(project.GetData());
                     if (SetupD3D11MultiPass(project.GetData())) {
                         lastShaderError.clear();
                         std::cout << "D3D11 Shader reloaded successfully." << std::endl;

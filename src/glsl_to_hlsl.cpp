@@ -299,6 +299,54 @@ static std::string CrossCompileToHlsl(const std::vector<uint32_t>& spirv,
             }
         }
 
+        // 后处理：安全化 tanh 调用
+        // 某些 D3D11 GPU/驱动对极大输入的 tanh 返回 NaN 而非 ±1，
+        // 导致迭代式 shader 数值发散（如 zippy_zaps）。
+        // 注入 _safe_tanh 重载函数并替换所有 tanh 调用。
+        if (hlsl.find("tanh(") != std::string::npos) {
+            // 先替换用户代码中的 tanh( → _safe_tanh(
+            // 此时 HLSL 中还没有 _safe_tanh 定义，所以不会误替换
+            // 注意：跳过 atanh( 等前缀包含字母的情况
+            {
+                std::string result;
+                result.reserve(hlsl.size() + 256);
+                size_t pos = 0;
+                while (pos < hlsl.size()) {
+                    size_t found = hlsl.find("tanh(", pos);
+                    if (found == std::string::npos) {
+                        result.append(hlsl, pos, hlsl.size() - pos);
+                        break;
+                    }
+                    // 检查前一个字符是否为字母或下划线（如 atanh, _tanh 等）
+                    bool partOfWord = (found > 0 && (std::isalnum(static_cast<unsigned char>(hlsl[found - 1])) || hlsl[found - 1] == '_'));
+                    result.append(hlsl, pos, found - pos);
+                    if (partOfWord) {
+                        result += "tanh(";  // 保持原样
+                    } else {
+                        result += "_safe_tanh(";
+                    }
+                    pos = found + 5;  // skip "tanh("
+                }
+                hlsl = std::move(result);
+            }
+
+            // 然后在 cbuffer 之前插入 _safe_tanh 定义（内部调用原生 tanh）
+            static const char* safeTanhDefs = R"hlsl(
+// Safe tanh: clamp input to avoid NaN on some D3D11 GPU drivers
+float  _safe_tanh(float  x) { return tanh(clamp(x, -20.0f, 20.0f)); }
+float2 _safe_tanh(float2 x) { return tanh(clamp(x, -20.0f, 20.0f)); }
+float3 _safe_tanh(float3 x) { return tanh(clamp(x, -20.0f, 20.0f)); }
+float4 _safe_tanh(float4 x) { return tanh(clamp(x, -20.0f, 20.0f)); }
+
+)hlsl";
+            size_t cbufPos = hlsl.find("cbuffer ");
+            if (cbufPos != std::string::npos) {
+                hlsl.insert(cbufPos, safeTanhDefs);
+            } else {
+                hlsl = std::string(safeTanhDefs) + hlsl;
+            }
+        }
+
         // 后处理：修复 X3507 "Not all control paths return a value"
         // 为非 void 函数添加兜底 return 语句
         // SPIRV-Cross 生成的函数格式规律：顶格 "type name(params)\n{"，末尾顶格 "}"
