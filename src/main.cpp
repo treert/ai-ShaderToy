@@ -1073,14 +1073,15 @@ int main(int argc, char* argv[]) {
     std::cout << "Shader loaded: " << config.shaderPath
               << (projData.isMultiPass ? " (multi-pass)" : " (single-pass)") << std::endl;
 
-    // 窗口标题更新（显示渲染后端和 shader 名称）
+    // 窗口标题更新（显示渲染后端、shader 名称、窗口尺寸）
     auto updateWindowTitle = [&]() {
         if (config.wallpaperMode || !window) return;
         namespace fs = std::filesystem;
         fs::path sp(config.shaderPath);
-        std::string name = fs::is_directory(sp) ? sp.filename().string() : sp.filename().string();
+        std::string name = sp.filename().string();
         std::string backend = useD3D11 ? "D3D11" : "OpenGL";
-        std::string title = std::string(kWindowTitle) + " [" + backend + "] - " + name;
+        std::string title = std::string(kWindowTitle) + " [" + backend + "] - " + name
+            + " (" + std::to_string(config.width) + "x" + std::to_string(config.height) + ")";
         SDL_SetWindowTitle(window, title.c_str());
     };
     updateWindowTitle();
@@ -1462,6 +1463,7 @@ int main(int argc, char* argv[]) {
                             multiPass.Resize(config.width, config.height);
                         }
                     }
+                    updateWindowTitle();
                 }
                 break;
             case SDL_MOUSEMOTION:
