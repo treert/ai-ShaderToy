@@ -53,9 +53,9 @@ static std::string SynthesizeFullGlsl(
          << "    vec4  _cubeFaceUp;\n"
          << "    vec4  _cubeFaceDir;\n"
          << "};\n\n"
-         // 提供 ShaderToy 标准变量名的别名
-         << "#define iChannelTime    float[4](iChannelTime_.x, iChannelTime_.y, iChannelTime_.z, iChannelTime_.w)\n"
-         << "#define iChannelResolution vec3[4](iChannelResolution_[0].xyz, iChannelResolution_[1].xyz, iChannelResolution_[2].xyz, iChannelResolution_[3].xyz)\n\n";
+         // 提供 ShaderToy 标准变量名——全局数组，在 main() 入口从 UBO 赋值
+         << "float iChannelTime[4];\n"
+         << "vec3  iChannelResolution[4];\n\n";
 
     // 通道采样器声明
     const char* samplerTypeNames[] = {"sampler2D", "sampler2D", "samplerCube", "sampler3D"};
@@ -84,9 +84,23 @@ static std::string SynthesizeFullGlsl(
     glsl << userSource << "\n";
 
     // main 入口
+    // 先生成 UBO → 全局数组赋值代码
+    const char* initArrays = R"glsl(
+    // 从 UBO vec4 成员赋值到 ShaderToy 标准数组
+    iChannelTime[0] = iChannelTime_.x;
+    iChannelTime[1] = iChannelTime_.y;
+    iChannelTime[2] = iChannelTime_.z;
+    iChannelTime[3] = iChannelTime_.w;
+    iChannelResolution[0] = iChannelResolution_[0].xyz;
+    iChannelResolution[1] = iChannelResolution_[1].xyz;
+    iChannelResolution[2] = iChannelResolution_[2].xyz;
+    iChannelResolution[3] = iChannelResolution_[3].xyz;
+)glsl";
+
     if (isCubeMapPass) {
-        glsl << R"glsl(
-void main() {
+        glsl << "\nvoid main() {\n"
+             << initArrays
+             << R"glsl(
     _fragColor_out = vec4(0.0);
     vec2 uv = (gl_FragCoord.xy / iResolution.xy) * 2.0 - 1.0;
     vec3 rayDir = normalize(_cubeFaceDir + uv.x * _cubeFaceRight + uv.y * _cubeFaceUp);
@@ -95,8 +109,9 @@ void main() {
 }
 )glsl";
     } else {
-        glsl << R"glsl(
-void main() {
+        glsl << "\nvoid main() {\n"
+             << initArrays
+             << R"glsl(
     _fragColor_out = vec4(0.0);
     mainImage(_fragColor_out, gl_FragCoord.xy);
 }
@@ -165,6 +180,7 @@ static std::string CrossCompileToHlsl(const std::vector<uint32_t>& spirv,
         // 通用编译选项
         spirv_cross::CompilerGLSL::Options commonOpts;
         commonOpts.flatten_multidimensional_arrays = true;
+        commonOpts.force_zero_initialized_variables = true;  // 解决 HLSL X3508: out 参数未初始化
         compiler.set_common_options(commonOpts);
 
         // 通过反射获取资源并设置 register 绑定
@@ -246,6 +262,92 @@ static std::string CrossCompileToHlsl(const std::vector<uint32_t>& spirv,
                     "\n    gl_FragCoord.y = iResolution.y - gl_FragCoord.y;"
                 );
             }
+        }
+
+        // 后处理：重命名与 HLSL 内置函数冲突的变量名
+        // SPIRV-Cross 翻译时 GLSL fract() → HLSL frac()，但如果用户代码有
+        // 变量名 fract，也会被翻译为 frac，导致和内置函数 frac() 冲突。
+        // 检测模式：类型声明后跟内置函数名作为变量（如 "float frac"）
+        {
+            static const char* hlslBuiltins[] = {
+                "frac", "clip", "step", "lerp", "clamp", "sign", "normalize",
+                "reflect", "refract", "distance", "length", "dot", "cross",
+                "sample", "noise", "abort", "log", "log2", "exp", "exp2",
+                "pow", "sqrt", "rsqrt", "round", "trunc", "ceil", "floor",
+                nullptr
+            };
+            for (const char** p = hlslBuiltins; *p; ++p) {
+                std::string name = *p;
+                // 检测是否存在 "类型 name =" 或 "类型 name;" 模式（变量声明）
+                std::regex declRe("(float|int|uint|half|double|bool)\\s+" + name + "\\s*[=;,)]");
+                if (std::regex_search(hlsl, declRe)) {
+                    // 全词替换为 name_var（但只替换变量引用，不替换函数调用）
+                    // 策略：先把变量声明和所有非函数调用的引用重命名
+                    // 简单做法：全词替换 name 为 name_var，然后把 name_var( 改回 name(
+                    std::string renamed = name + "_var";
+                    std::regex wordRe("\\b" + name + "\\b");
+                    hlsl = std::regex_replace(hlsl, wordRe, renamed);
+                    // 恢复内置函数调用：name_var( → name(
+                    std::string fnCall = renamed + "(";
+                    std::string fnOrig = name + "(";
+                    size_t pos = 0;
+                    while ((pos = hlsl.find(fnCall, pos)) != std::string::npos) {
+                        hlsl.replace(pos, fnCall.size(), fnOrig);
+                        pos += fnOrig.size();
+                    }
+                }
+            }
+        }
+
+        // 后处理：修复 X3507 "Not all control paths return a value"
+        // 为非 void 函数添加兜底 return 语句
+        // SPIRV-Cross 生成的函数格式规律：顶格 "type name(params)\n{"，末尾顶格 "}"
+        {
+            static const std::regex funcDefRe(
+                R"(^(float[2-4]?|int[2-4]?|uint[2-4]?|bool|half[2-4]?)\s+(\w+)\s*\([^)]*\)\s*$)");
+            std::string result;
+            result.reserve(hlsl.size() + 256);
+            std::istringstream stream(hlsl);
+            std::string line;
+            std::string pendingReturnType;  // 非空表示上一个函数需要兜底 return
+            int braceDepth = 0;
+            bool inNonVoidFunc = false;
+
+            while (std::getline(stream, line)) {
+                // 检测函数定义
+                std::smatch m;
+                if (std::regex_match(line, m, funcDefRe)) {
+                    pendingReturnType = m[1].str();
+                    inNonVoidFunc = false;
+                    braceDepth = 0;
+                }
+
+                // 跟踪大括号深度
+                for (char c : line) {
+                    if (c == '{') {
+                        if (!pendingReturnType.empty() && braceDepth == 0) {
+                            inNonVoidFunc = true;
+                        }
+                        braceDepth++;
+                    } else if (c == '}') {
+                        braceDepth--;
+                        if (inNonVoidFunc && braceDepth == 0) {
+                            // 函数结束——在 } 前插入兜底 return
+                            std::string defaultVal = "0";
+                            if (pendingReturnType.find("2") != std::string::npos) defaultVal = "0.0f.xx";
+                            else if (pendingReturnType.find("3") != std::string::npos) defaultVal = "0.0f.xxx";
+                            else if (pendingReturnType.find("4") != std::string::npos) defaultVal = "0.0f.xxxx";
+                            else defaultVal = "0.0f";
+                            result += "    return " + defaultVal + ";\n";
+                            inNonVoidFunc = false;
+                            pendingReturnType.clear();
+                        }
+                    }
+                }
+
+                result += line + "\n";
+            }
+            hlsl = std::move(result);
         }
 
         return hlsl;
@@ -524,7 +626,7 @@ bool CompileHlslForValidation(const std::string& hlslSource,
                               std::string& outErrors) {
     outErrors.clear();
 
-    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL0;
+    UINT compileFlags = D3DCOMPILE_OPTIMIZATION_LEVEL0;
 
     ID3D10Blob* shaderBlob = nullptr;
     ID3D10Blob* errorBlob = nullptr;

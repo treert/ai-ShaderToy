@@ -83,7 +83,7 @@ bool D3D11ShaderManager::LoadFromSource(const std::string& glslSource) {
     ComPtr<ID3D10Blob> shaderBlob;
     ComPtr<ID3D10Blob> errorBlob;
 
-    UINT compileFlags = D3DCOMPILE_ENABLE_STRICTNESS;
+    UINT compileFlags = 0;  // 不启用 ENABLE_STRICTNESS，兼容 GLSL 语义（如 out 参数未完全初始化）
 #ifdef _DEBUG
     compileFlags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
 #else
