@@ -191,7 +191,7 @@ static void PrintUsage(const char* programName) {
               << "  --renderscale <f>    Render resolution scale 0.0-1.0 (default: 1.0)\n"
               << "  --debug              Show debug overlay in wallpaper mode (default: off)\n"
               << "  --no-pause-on-fullscreen  Disable auto-pause when fullscreen app covers desktop\n"
-              << "  --translate          Translate shader (GLSL->HLSL) and save to Logs directory, then exit\n"
+              << "  --translate [path]   Translate shader (GLSL->HLSL) and save to Logs directory, then exit\n"
               << "  --d3d11              Use D3D11 renderer in window mode (default: OpenGL)\n"
               << "  --quiet, -q          Suppress console output (log file only)\n"
               << "  --help, -h           Show this help\n";
@@ -244,6 +244,10 @@ static AppConfig ParseArgs(int argc, char* argv[]) {
             config.pauseOnFullscreen = false;
         } else if (arg == "--translate") {
             config.translateMode = true;
+            // --translate 可带可选路径参数：--translate <path> 等同于 --translate --shader <path>
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                config.shaderPath = argv[++i];
+            }
         } else if (arg == "--d3d11") {
             config.useD3D11Mode = true;
         } else if (arg == "--quiet" || arg == "-q") {

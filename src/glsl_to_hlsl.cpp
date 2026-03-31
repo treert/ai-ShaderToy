@@ -37,7 +37,7 @@ static std::string SynthesizeFullGlsl(
     // ShaderToy 内置 uniform 声明——使用 std140 uniform block 确保 SPIRV-Cross 生成 cbuffer
     // 内存布局必须与 C++ ShaderToyConstants 结构体对齐
     glsl << "layout(std140) uniform ShaderToyUniforms {\n"
-         << "    vec4  iResolution;           // xyz=resolution, w=padding\n"
+         << "    vec4  _iResolution4;          // xyz=resolution, w=padding (内部别名)\n"
          << "    float iTime;\n"
          << "    float iTimeDelta;\n"
          << "    int   iFrame;\n"
@@ -53,7 +53,8 @@ static std::string SynthesizeFullGlsl(
          << "    vec4  _cubeFaceUp;\n"
          << "    vec4  _cubeFaceDir;\n"
          << "};\n\n"
-         // 提供 ShaderToy 标准变量名——全局数组，在 main() 入口从 UBO 赋值
+         // 提供 ShaderToy 标准变量名
+         << "vec3 iResolution = _iResolution4.xyz;\n"  // ShaderToy 的 iResolution 是 vec3
          << "float iChannelTime[4];\n"
          << "vec3  iChannelResolution[4];\n\n";
 
@@ -252,13 +253,22 @@ static std::string CrossCompileToHlsl(const std::vector<uint32_t>& spirv,
         // 而 OpenGL gl_FragCoord.y 是 bottom-up（bottom=0.5, top=H-0.5）
         // Image pass 需要翻转（最终输出到屏幕），Buffer pass 不翻转
         // （Buffer pass 不翻转时 texelFetch(ivec2(fragCoord)) 坐标和 RTV 一致）
+        // 注意：全局 iResolution 在 frag_main() 中才赋值，但 Y 翻转在 frag_main() 之前，
+        //       所以必须使用 cbuffer 中的 _iResolution4 成员（带 SPIRV-Cross 数字前缀）
         if (flipFragCoordY) {
             const std::string wLine = "gl_FragCoord.w = 1.0 / gl_FragCoord.w;";
             size_t wPos = hlsl.find(wLine);
             if (wPos != std::string::npos) {
+                // 查找 cbuffer 中实际的 iResolution4 成员名（可能有 _数字_ 前缀）
+                std::string resName = "iResolution";  // 默认回退
+                std::regex resRe(R"((\w*_iResolution4)\s*:\s*packoffset)");
+                std::smatch resMatch;
+                if (std::regex_search(hlsl, resMatch, resRe)) {
+                    resName = resMatch[1].str();
+                }
                 size_t insertPos = wPos + wLine.size();
                 hlsl.insert(insertPos,
-                    "\n    gl_FragCoord.y = iResolution.y - gl_FragCoord.y;"
+                    "\n    gl_FragCoord.y = " + resName + ".y - gl_FragCoord.y;"
                 );
             }
         }
@@ -392,6 +402,26 @@ float4 _safe_tanh(float4 x) { return tanh(clamp(x, -20.0f, 20.0f)); }
                     }
                 }
 
+                result += line + "\n";
+            }
+            hlsl = std::move(result);
+        }
+
+        // 后处理：为所有 for/while 循环添加 [loop] 属性
+        // 防止 D3D11 HLSL 编译器展开含 gradient 指令（ddx/ddy）的大循环时报
+        // X3511 "unable to unroll loop" 错误（如 a_tiny_plane 的 75 次 ray march 循环）
+        {
+            static const std::regex loopRe(R"(^(\s+)(for|while)\s*\()");
+            std::string result;
+            result.reserve(hlsl.size() + 512);
+            std::istringstream stream(hlsl);
+            std::string line;
+            while (std::getline(stream, line)) {
+                std::smatch m;
+                if (std::regex_search(line, m, loopRe)) {
+                    // 在循环行前插入 [loop] 属性，保持相同缩进
+                    result += m[1].str() + "[loop]\n";
+                }
                 result += line + "\n";
             }
             hlsl = std::move(result);
