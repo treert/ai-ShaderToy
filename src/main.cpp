@@ -120,6 +120,22 @@ static std::filesystem::path GetLogDir() {
     return dir;
 }
 
+/// 从 shaderPath 提取 HLSL dump 用的名称，带格式后缀区分来源：
+///   目录格式 → "name@dir"，json 格式 → "name@json"，glsl 单文件 → "name"
+static std::string GetShaderDumpName(const std::string& shaderPath) {
+    namespace fs = std::filesystem;
+    fs::path srcPath(shaderPath);
+    if (fs::is_directory(srcPath)) {
+        return srcPath.filename().string() + "@dir";
+    }
+    std::string ext = srcPath.extension().string();
+    std::string name = srcPath.stem().string();
+    if (ext == ".json") {
+        return name + "@json";
+    }
+    return name;  // .glsl 等单文件，无后缀
+}
+
 /// 第一步：附加控制台（解析参数前调用，让 --help 等能输出到终端）
 static void InitConsole() {
 #ifdef _WIN32
@@ -380,13 +396,9 @@ int main(int argc, char* argv[]) {
         }
         const auto& data = project.GetData();
 
-        // 从 shaderPath 提取 shader 名称（不带扩展名）
+        // 从 shaderPath 提取 shader 名称（带格式后缀）
         namespace fs = std::filesystem;
-        fs::path srcPath(config.shaderPath);
-        std::string shaderName = srcPath.stem().string();
-        if (fs::is_directory(srcPath)) {
-            shaderName = srcPath.filename().string();
-        }
+        std::string shaderName = GetShaderDumpName(config.shaderPath);
 
         auto logDir = GetLogDir() / "translate-mode";
         bool isMulti = data.isMultiPass || data.hasCubeMapPass || !data.commonSource.empty();
@@ -804,7 +816,9 @@ int main(int argc, char* argv[]) {
     };
 
     const auto& projData = project.GetData();
-    LoadTexturesForProject(projData);
+    if (!useD3D11) {
+        LoadTexturesForProject(projData);
+    }
 
     // ============================================================
     // 配置 MultiPassRenderer
@@ -1004,11 +1018,7 @@ int main(int argc, char* argv[]) {
         // HLSL 翻译输出：先 dump 再 setup，确保编译失败也能输出 HLSL 方便调试
         {
             namespace fs = std::filesystem;
-            fs::path srcPath(config.shaderPath);
-            std::string sName = srcPath.stem().string();
-            if (fs::is_directory(srcPath)) {
-                sName = srcPath.filename().string();
-            }
+            std::string sName = GetShaderDumpName(config.shaderPath);
             std::string subDir = config.wallpaperMode ? "wallpaper-mode" : "window-mode";
             fs::path outDir = GetLogDir() / subDir / sName;
             std::cout << "HLSL dump (" << subDir << "): " << config.shaderPath << std::endl;
@@ -1035,11 +1045,7 @@ int main(int argc, char* argv[]) {
 #ifdef _WIN32
         if (!useD3D11) return;
         namespace fs = std::filesystem;
-        fs::path srcPath(config.shaderPath);
-        std::string shaderName = srcPath.stem().string();
-        if (fs::is_directory(srcPath)) {
-            shaderName = srcPath.filename().string();
-        }
+        std::string shaderName = GetShaderDumpName(config.shaderPath);
         std::string subDir = config.wallpaperMode ? "wallpaper-mode" : "window-mode";
         fs::path outDir = GetLogDir() / subDir / shaderName;
         std::cout << "HLSL dump (" << subDir << "): " << config.shaderPath << std::endl;
