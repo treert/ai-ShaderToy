@@ -24,6 +24,103 @@ void ShutdownShaderTranslator() {
     glslang::FinalizeProcess();
 }
 
+/// GLSL 层预处理：在送给 glslang 之前修改用户代码
+/// 目的是在 GLSL 阶段解决问题，减少 SPIRV-Cross HLSL 后处理的负担
+static std::string PreprocessGlsl(const std::string& source) {
+    std::string s = source;
+
+    // --- 1. 变量名冲突预重命名 ---
+    // SPIRV-Cross 翻译时会把 GLSL 函数名映射为 HLSL 等价函数：
+    //   fract() → frac(), mix() → lerp() 等
+    // 如果用户代码中有**变量名**恰好是 GLSL 函数名（如 "float fract"），
+    // 翻译后变量名也会变成 HLSL 函数名（"float frac"），导致冲突。
+    // 解决：在 GLSL 层就把这些变量名加 _var 后缀。
+    //
+    // 映射表：GLSL 变量名 → 翻译后的 HLSL 名字（可能冲突的）
+    // 只需检测 GLSL 中的变量声明，不需要关心 GLSL 函数调用
+    static const struct { const char* glslName; const char* hlslConflict; } conflictMap[] = {
+        {"fract", "frac"},      // fract() → frac()，变量 fract → frac 冲突
+        {"mod",   nullptr},     // mod → glsl_mod（旧翻译器），SPIRV-Cross 不重命名，但保留以防万一
+        {nullptr, nullptr}
+    };
+    // 另外，用户变量名可能直接就是 HLSL 内置函数名（不需要经过映射）
+    static const char* directConflicts[] = {
+        "frac", "clip", "step", "lerp", "clamp", "sign", "normalize",
+        "reflect", "refract", "distance", "length", "dot", "cross",
+        "sample", "noise", "abort", "log", "log2", "exp", "exp2",
+        "pow", "sqrt", "rsqrt", "round", "trunc", "ceil", "floor",
+        nullptr
+    };
+
+    auto renameVarInGlsl = [&s](const std::string& varName) {
+        // 检测是否存在变量声明模式（类型名 + 空格 + 变量名 + [=;,)]）
+        std::regex declRe("(float|int|uint|double|bool|vec[234]|ivec[234]|uvec[234]|mat[234])\\s+"
+                          + varName + "\\s*[=;,)]");
+        if (std::regex_search(s, declRe)) {
+            // 全词替换变量名为 varName_var
+            std::string renamed = varName + "_var";
+            std::regex wordRe("\\b" + varName + "\\b");
+            // 先全替换，然后恢复函数调用
+            s = std::regex_replace(s, wordRe, renamed);
+            // 恢复函数调用：varName_var( → varName(
+            std::string fnCall = renamed + "(";
+            std::string fnOrig = varName + "(";
+            size_t pos = 0;
+            while ((pos = s.find(fnCall, pos)) != std::string::npos) {
+                s.replace(pos, fnCall.size(), fnOrig);
+                pos += fnOrig.size();
+            }
+        }
+    };
+
+    // 检测 GLSL 变量名经翻译后会冲突的情况
+    for (auto* p = &conflictMap[0]; p->glslName; ++p) {
+        renameVarInGlsl(p->glslName);
+    }
+    // 检测直接冲突的变量名（名字在 GLSL 和 HLSL 中相同）
+    for (const char** p = directConflicts; *p; ++p) {
+        renameVarInGlsl(*p);
+    }
+
+    // --- 2. tanh 安全化 ---
+    // 某些 D3D11 GPU/驱动对极大输入的 tanh 返回 NaN，导致数值发散。
+    // 在 GLSL 层替换 tanh → _safe_tanh，注入 GLSL 版 _safe_tanh 定义。
+    // 这样 glslang 编译后 SPIR-V 中就是 _safe_tanh，SPIRV-Cross 直接输出，无需 HLSL 后处理。
+    if (s.find("tanh(") != std::string::npos) {
+        // 替换 tanh( → _safe_tanh(，跳过 atanh( 等前缀
+        std::string result;
+        result.reserve(s.size() + 256);
+        size_t pos = 0;
+        while (pos < s.size()) {
+            size_t found = s.find("tanh(", pos);
+            if (found == std::string::npos) {
+                result.append(s, pos, s.size() - pos);
+                break;
+            }
+            bool partOfWord = (found > 0 && (std::isalnum(static_cast<unsigned char>(s[found - 1])) || s[found - 1] == '_'));
+            result.append(s, pos, found - pos);
+            if (partOfWord) {
+                result += "tanh(";
+            } else {
+                result += "_safe_tanh(";
+            }
+            pos = found + 5;
+        }
+        s = std::move(result);
+
+        // 在代码开头注入 GLSL 版 _safe_tanh 定义
+        static const char* safeTanhGlsl =
+            "// Safe tanh: clamp input to avoid NaN on some D3D11 GPU drivers\n"
+            "float  _safe_tanh(float  x) { return tanh(clamp(x, -20.0, 20.0)); }\n"
+            "vec2   _safe_tanh(vec2   x) { return tanh(clamp(x, vec2(-20.0), vec2(20.0))); }\n"
+            "vec3   _safe_tanh(vec3   x) { return tanh(clamp(x, vec3(-20.0), vec3(20.0))); }\n"
+            "vec4   _safe_tanh(vec4   x) { return tanh(clamp(x, vec4(-20.0), vec4(20.0))); }\n\n";
+        s = std::string(safeTanhGlsl) + s;
+    }
+
+    return s;
+}
+
 /// 合成完整的标准 GLSL 330 程序，供 glslang 编译
 static std::string SynthesizeFullGlsl(
     const std::string& userSource,
@@ -75,15 +172,16 @@ static std::string SynthesizeFullGlsl(
 
     glsl << "\nout vec4 _fragColor_out;\n\n";
 
-    // Common 共享代码段
+    // Common 共享代码段（预处理：变量名冲突重命名 + tanh 安全化）
     if (!commonSource.empty()) {
+        std::string processedCommon = PreprocessGlsl(commonSource);
         glsl << "// === Common code begin ===\n"
-             << commonSource
+             << processedCommon
              << "\n// === Common code end ===\n\n";
     }
 
-    // 用户 shader 代码
-    glsl << userSource << "\n";
+    // 用户 shader 代码（预处理：变量名冲突重命名 + tanh 安全化）
+    glsl << PreprocessGlsl(userSource) << "\n";
 
     // main 入口
     // 先生成 UBO → 全局数组赋值代码
@@ -276,88 +374,8 @@ static std::string CrossCompileToHlsl(const std::vector<uint32_t>& spirv,
             }
         }
 
-        // 后处理：重命名与 HLSL 内置函数冲突的变量名
-        // SPIRV-Cross 翻译时 GLSL fract() → HLSL frac()，但如果用户代码有
-        // 变量名 fract，也会被翻译为 frac，导致和内置函数 frac() 冲突。
-        // 检测模式：类型声明后跟内置函数名作为变量（如 "float frac"）
-        {
-            static const char* hlslBuiltins[] = {
-                "frac", "clip", "step", "lerp", "clamp", "sign", "normalize",
-                "reflect", "refract", "distance", "length", "dot", "cross",
-                "sample", "noise", "abort", "log", "log2", "exp", "exp2",
-                "pow", "sqrt", "rsqrt", "round", "trunc", "ceil", "floor",
-                nullptr
-            };
-            for (const char** p = hlslBuiltins; *p; ++p) {
-                std::string name = *p;
-                // 检测是否存在 "类型 name =" 或 "类型 name;" 模式（变量声明）
-                std::regex declRe("(float|int|uint|half|double|bool)\\s+" + name + "\\s*[=;,)]");
-                if (std::regex_search(hlsl, declRe)) {
-                    // 全词替换为 name_var（但只替换变量引用，不替换函数调用）
-                    // 策略：先把变量声明和所有非函数调用的引用重命名
-                    // 简单做法：全词替换 name 为 name_var，然后把 name_var( 改回 name(
-                    std::string renamed = name + "_var";
-                    std::regex wordRe("\\b" + name + "\\b");
-                    hlsl = std::regex_replace(hlsl, wordRe, renamed);
-                    // 恢复内置函数调用：name_var( → name(
-                    std::string fnCall = renamed + "(";
-                    std::string fnOrig = name + "(";
-                    size_t pos = 0;
-                    while ((pos = hlsl.find(fnCall, pos)) != std::string::npos) {
-                        hlsl.replace(pos, fnCall.size(), fnOrig);
-                        pos += fnOrig.size();
-                    }
-                }
-            }
-        }
-
-        // 后处理：安全化 tanh 调用
-        // 某些 D3D11 GPU/驱动对极大输入的 tanh 返回 NaN 而非 ±1，
-        // 导致迭代式 shader 数值发散（如 zippy_zaps）。
-        // 注入 _safe_tanh 重载函数并替换所有 tanh 调用。
-        if (hlsl.find("tanh(") != std::string::npos) {
-            // 先替换用户代码中的 tanh( → _safe_tanh(
-            // 此时 HLSL 中还没有 _safe_tanh 定义，所以不会误替换
-            // 注意：跳过 atanh( 等前缀包含字母的情况
-            {
-                std::string result;
-                result.reserve(hlsl.size() + 256);
-                size_t pos = 0;
-                while (pos < hlsl.size()) {
-                    size_t found = hlsl.find("tanh(", pos);
-                    if (found == std::string::npos) {
-                        result.append(hlsl, pos, hlsl.size() - pos);
-                        break;
-                    }
-                    // 检查前一个字符是否为字母或下划线（如 atanh, _tanh 等）
-                    bool partOfWord = (found > 0 && (std::isalnum(static_cast<unsigned char>(hlsl[found - 1])) || hlsl[found - 1] == '_'));
-                    result.append(hlsl, pos, found - pos);
-                    if (partOfWord) {
-                        result += "tanh(";  // 保持原样
-                    } else {
-                        result += "_safe_tanh(";
-                    }
-                    pos = found + 5;  // skip "tanh("
-                }
-                hlsl = std::move(result);
-            }
-
-            // 然后在 cbuffer 之前插入 _safe_tanh 定义（内部调用原生 tanh）
-            static const char* safeTanhDefs = R"hlsl(
-// Safe tanh: clamp input to avoid NaN on some D3D11 GPU drivers
-float  _safe_tanh(float  x) { return tanh(clamp(x, -20.0f, 20.0f)); }
-float2 _safe_tanh(float2 x) { return tanh(clamp(x, -20.0f, 20.0f)); }
-float3 _safe_tanh(float3 x) { return tanh(clamp(x, -20.0f, 20.0f)); }
-float4 _safe_tanh(float4 x) { return tanh(clamp(x, -20.0f, 20.0f)); }
-
-)hlsl";
-            size_t cbufPos = hlsl.find("cbuffer ");
-            if (cbufPos != std::string::npos) {
-                hlsl.insert(cbufPos, safeTanhDefs);
-            } else {
-                hlsl = std::string(safeTanhDefs) + hlsl;
-            }
-        }
+        // 注：变量名冲突重命名和 tanh 安全化已上移到 GLSL 层 PreprocessGlsl()，
+        //     在送给 glslang 之前处理，SPIRV-Cross 输出的 HLSL 不再需要这两项后处理。
 
         // 后处理：修复 X3507 "Not all control paths return a value"
         // 为非 void 函数添加兜底 return 语句
