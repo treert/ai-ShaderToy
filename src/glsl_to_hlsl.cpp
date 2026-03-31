@@ -36,6 +36,7 @@ static std::string SynthesizeFullGlsl(
 
     // ShaderToy 内置 uniform 声明——使用 std140 uniform block 确保 SPIRV-Cross 生成 cbuffer
     // 内存布局必须与 C++ ShaderToyConstants 结构体对齐
+    // 无实例名，UBO 成员作为全局变量直接可用（ShaderToy 用户代码直接引用 iTime 等）
     glsl << "layout(std140) uniform ShaderToyUniforms {\n"
          << "    vec4  _iResolution4;          // xyz=resolution, w=padding (内部别名)\n"
          << "    float iTime;\n"
@@ -54,7 +55,7 @@ static std::string SynthesizeFullGlsl(
          << "    vec4  _cubeFaceDir;\n"
          << "};\n\n"
          // 提供 ShaderToy 标准变量名
-         << "vec3 iResolution = _iResolution4.xyz;\n"  // ShaderToy 的 iResolution 是 vec3
+         << "vec3 iResolution = _iResolution4.xyz;\n"
          << "float iChannelTime[4];\n"
          << "vec3  iChannelResolution[4];\n\n";
 
@@ -189,17 +190,15 @@ static std::string CrossCompileToHlsl(const std::vector<uint32_t>& spirv,
         auto resources = compiler.get_shader_resources();
 
         // cbuffer → register(b0)
-        // 收集所有 UBO 成员名，用于后处理去前缀
-        std::vector<std::string> uboMemberNames;
+        // glslang 为无实例名的 uniform block 生成匿名变量名（如 _24），
+        // 导致 SPIRV-Cross 生成不确定的 _24_memberName 前缀。
+        // 通过 set_name 强制 UBO 变量名为 _stU（ShaderToy Uniform），
+        // 使前缀变为确定性的 "_stU_"，后处理只需简单的字符串替换即可。
+        // 使用 _stU 而非 _st 以降低与用户代码变量名冲突的风险。
         for (auto& ub : resources.uniform_buffers) {
             compiler.set_decoration(ub.id, spv::DecorationBinding, 0);
             compiler.set_decoration(ub.id, spv::DecorationDescriptorSet, 0);
-
-            // 收集 block 成员名
-            auto& type = compiler.get_type(ub.base_type_id);
-            for (uint32_t i = 0; i < type.member_types.size(); ++i) {
-                uboMemberNames.push_back(compiler.get_member_name(ub.base_type_id, i));
-            }
+            compiler.set_name(ub.id, "_stU");
         }
 
         // 纹理 → register(t0-t3)
@@ -241,12 +240,15 @@ static std::string CrossCompileToHlsl(const std::vector<uint32_t>& spirv,
 
         std::string hlsl = compiler.compile();
 
-        // 后处理：SPIRV-Cross 对无实例名的 uniform block 生成 _ID_ 前缀
-        // 如 _24_iTime → iTime。用成员名精确匹配替换。
-        for (auto& memberName : uboMemberNames) {
-            // 匹配 _数字_memberName 模式
-            std::regex prefixRe("_\\d+_" + memberName);
-            hlsl = std::regex_replace(hlsl, prefixRe, memberName);
+        // 后处理：删除 SPIRV-Cross 生成的 "_stU_" 前缀
+        // set_name(ub.id, "_stU") → SPIRV-Cross cbuffer 成员名 _stU_memberName
+        // 简单字符串替换即可，不需要正则（确定性前缀，与用户代码冲突概率极低）
+        {
+            const std::string prefix = "_stU_";
+            size_t pos = 0;
+            while ((pos = hlsl.find(prefix, pos)) != std::string::npos) {
+                hlsl.erase(pos, prefix.size());
+            }
         }
 
         // 后处理：D3D11 SV_Position.y 是 top-down（top=0.5, bottom=H-0.5）
@@ -254,14 +256,15 @@ static std::string CrossCompileToHlsl(const std::vector<uint32_t>& spirv,
         // Image pass 需要翻转（最终输出到屏幕），Buffer pass 不翻转
         // （Buffer pass 不翻转时 texelFetch(ivec2(fragCoord)) 坐标和 RTV 一致）
         // 注意：全局 iResolution 在 frag_main() 中才赋值，但 Y 翻转在 frag_main() 之前，
-        //       所以必须使用 cbuffer 中的 _iResolution4 成员（带 SPIRV-Cross 数字前缀）
+        //       所以必须使用 cbuffer 中的 iResolution4 成员（经过前缀删除后无数字前缀）
         if (flipFragCoordY) {
             const std::string wLine = "gl_FragCoord.w = 1.0 / gl_FragCoord.w;";
             size_t wPos = hlsl.find(wLine);
             if (wPos != std::string::npos) {
-                // 查找 cbuffer 中实际的 iResolution4 成员名（可能有 _数字_ 前缀）
-                std::string resName = "iResolution";  // 默认回退
-                std::regex resRe(R"((\w*_iResolution4)\s*:\s*packoffset)");
+                // 查找 cbuffer 中实际的 iResolution4 成员名
+                // 匹配 packoffset(c0) 所在行的成员名（iResolution4 或可能带残留前缀）
+                std::string resName = "iResolution4";  // 默认：前缀已清理后的名字
+                std::regex resRe(R"((\w*iResolution4)\s*:\s*packoffset)");
                 std::smatch resMatch;
                 if (std::regex_search(hlsl, resMatch, resRe)) {
                     resName = resMatch[1].str();
