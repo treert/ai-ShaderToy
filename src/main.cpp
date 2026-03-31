@@ -1010,7 +1010,7 @@ int main(int argc, char* argv[]) {
                 sName = srcPath.filename().string();
             }
             std::string subDir = config.wallpaperMode ? "wallpaper-mode" : "window-mode";
-            fs::path outDir = GetLogDir() / subDir;
+            fs::path outDir = GetLogDir() / subDir / sName;
             std::cout << "HLSL dump (" << subDir << "): " << config.shaderPath << std::endl;
             int errors = TranslateAndDumpHlsl(project.GetData(), sName, outDir);
             if (errors > 0) {
@@ -1041,7 +1041,7 @@ int main(int argc, char* argv[]) {
             shaderName = srcPath.filename().string();
         }
         std::string subDir = config.wallpaperMode ? "wallpaper-mode" : "window-mode";
-        fs::path outDir = GetLogDir() / subDir;
+        fs::path outDir = GetLogDir() / subDir / shaderName;
         std::cout << "HLSL dump (" << subDir << "): " << config.shaderPath << std::endl;
         int errors = TranslateAndDumpHlsl(project.GetData(), shaderName, outDir);
         if (errors > 0) {
