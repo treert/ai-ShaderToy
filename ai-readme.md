@@ -104,3 +104,8 @@
 - [x] 窗口模式 D3D11 渲染（--d3d11 开关，复用壁纸模式 D3D11 组件，支持 resize/DebugUI/热加载）
 - [x] DebugUI 双后端支持（OpenGL + D3D11 ImGui 后端，InitD3D11 方法，按 useD3D11_ 分发渲染调用）
 - [x] 统一 HLSL 翻译输出路径（translate-mode / wallpaper-mode / window-mode 三个子目录，D3D11 模式自动 dump）
+- [x] HLSL dump 按格式区分目录（@json / @dir 后缀，避免同名 shader 冲突）
+- [x] D3D11 窗口模式崩溃修复（跳过无 GL 上下文时的 OpenGL 纹理加载）
+- [x] --quiet 静默模式（不输出到控制台，只写日志文件）
+- [x] 日志文件开头记录完整命令行（方便复制重跑）
+- [x] HLSL 文件来源注释（标注源 shader 路径和 pass 名，提醒不要手改）

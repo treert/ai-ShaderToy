@@ -62,6 +62,7 @@ struct AppConfig {
     bool        hotReload = true;
     bool        translateMode = false; // 翻译模式：GLSL→HLSL 翻译后输出到 Logs 目录
     bool        useD3D11Mode = false; // 窗口模式使用 D3D11 渲染（--d3d11）
+    bool        quiet = false;       // 静默模式：不输出到控制台，只写日志文件（--quiet）
     int         width  = kDefaultWidth;
     int         height = kDefaultHeight;
     int         targetFPS = -1;      // -1 表示未指定，默认60
@@ -150,13 +151,14 @@ static void InitConsole() {
 
 /// 第二步：初始化日志文件（解析参数后调用，根据模式选择文件名）
 /// wallpaper 模式 → wallpaper.log，窗口模式 → window.log
-static void InitLogFile(bool wallpaperMode) {
+/// quiet=true 时只写日志文件，不输出到控制台
+static void InitLogFile(bool wallpaperMode, bool quiet = false) {
 #ifdef _WIN32
     auto logName = wallpaperMode ? "shadertoy_log_wallpaper.log" : "shadertoy_log_window.log";
     auto logPath = GetLogDir() / logName;
     g_logFile.open(logPath, std::ios::out | std::ios::trunc);
 
-    std::streambuf* consoleBuf = g_hasConsole ? std::cout.rdbuf() : nullptr;
+    std::streambuf* consoleBuf = (!quiet && g_hasConsole) ? std::cout.rdbuf() : nullptr;
 
     if (g_logFile.is_open()) {
         g_coutTee = std::make_unique<TeeStreambuf>(g_logFile.rdbuf(), consoleBuf);
@@ -191,6 +193,7 @@ static void PrintUsage(const char* programName) {
               << "  --no-pause-on-fullscreen  Disable auto-pause when fullscreen app covers desktop\n"
               << "  --translate          Translate shader (GLSL->HLSL) and save to Logs directory, then exit\n"
               << "  --d3d11              Use D3D11 renderer in window mode (default: OpenGL)\n"
+              << "  --quiet, -q          Suppress console output (log file only)\n"
               << "  --help, -h           Show this help\n";
 }
 
@@ -243,6 +246,8 @@ static AppConfig ParseArgs(int argc, char* argv[]) {
             config.translateMode = true;
         } else if (arg == "--d3d11") {
             config.useD3D11Mode = true;
+        } else if (arg == "--quiet" || arg == "-q") {
+            config.quiet = true;
         } else if (arg == "--help" || arg == "-h") {
             PrintUsage(argv[0]);
             exit(0);
@@ -255,10 +260,12 @@ static AppConfig ParseArgs(int argc, char* argv[]) {
 /// @param data         已加载的 shader 项目数据
 /// @param shaderName   shader 名称（用于单 pass 的文件名）
 /// @param outDir       输出目录路径（多 pass 时各 pass 文件直接放在此目录下）
+/// @param sourcePath   原始 shader 来源路径（写入 HLSL 文件注释头）
 /// @return 编译失败的 pass 数量（0 表示全部通过）
 static int TranslateAndDumpHlsl(const ShaderProjectData& data,
                                 const std::string& shaderName,
-                                const std::filesystem::path& outDir) {
+                                const std::filesystem::path& outDir,
+                                const std::string& sourcePath = "") {
     namespace fs = std::filesystem;
     std::error_code ec;
     fs::create_directories(outDir, ec);
@@ -282,7 +289,18 @@ static int TranslateAndDumpHlsl(const ShaderProjectData& data,
     auto dumpPass = [&](const std::string& passCode,
                         const std::string& fileName,
                         const std::array<ChannelType, 4>& chTypes,
-                        bool isCubeMap) {
+                        bool isCubeMap,
+                        const std::string& passName = "") {
+        // 构造来源注释头
+        std::string header;
+        header += "// Auto-generated HLSL — DO NOT EDIT (changes will be overwritten)\n";
+        if (!sourcePath.empty()) {
+            header += "// Source: " + sourcePath;
+            if (!passName.empty()) header += "  [" + passName + "]";
+            header += "\n";
+        }
+        header += "//\n\n";
+
         std::string translateErrors;
         std::string fullHlsl = TranslateGlslToFullHlsl(passCode, chTypes,
                                                          data.commonSource, isCubeMap,
@@ -290,7 +308,7 @@ static int TranslateAndDumpHlsl(const ShaderProjectData& data,
 
         if (fullHlsl.empty()) {
             // 翻译失败，写入错误信息
-            fullHlsl = "// GLSL->HLSL translation failed\n/*\n" + translateErrors + "\n*/\n";
+            fullHlsl = header + "// GLSL->HLSL translation failed\n/*\n" + translateErrors + "\n*/\n";
             compileErrors++;
 
             fs::path outPath = outDir / fileName;
@@ -302,6 +320,9 @@ static int TranslateAndDumpHlsl(const ShaderProjectData& data,
 
         std::string compileErrorMsg;
         bool compileOk = CompileHlslForValidation(fullHlsl, fileName, compileErrorMsg);
+
+        // 在翻译后的 HLSL 前插入来源注释头
+        fullHlsl = header + fullHlsl;
 
         if (!compileOk) {
             fullHlsl += "\n\n/*\n=== HLSL Compile Errors ===\n";
@@ -331,7 +352,7 @@ static int TranslateAndDumpHlsl(const ShaderProjectData& data,
 
     if (!isMulti) {
         auto chTypes = getChannelTypes(data.imagePass);
-        dumpPass(data.imagePass.code, shaderName + ".hlsl", chTypes, false);
+        dumpPass(data.imagePass.code, shaderName + ".hlsl", chTypes, false, "Image");
     } else {
         // Common 段
         if (!data.commonSource.empty()) {
@@ -339,7 +360,9 @@ static int TranslateAndDumpHlsl(const ShaderProjectData& data,
             fs::path commonPath = outDir / "common.hlsl";
             std::ofstream ofs(commonPath, std::ios::out | std::ios::trunc);
             if (ofs.is_open()) {
-                ofs << "// Common code (translated from GLSL)\n" << commonHlsl;
+                ofs << "// Auto-generated HLSL — DO NOT EDIT (changes will be overwritten)\n";
+                if (!sourcePath.empty()) ofs << "// Source: " << sourcePath << "  [Common]\n";
+                ofs << "//\n\n" << commonHlsl;
                 ofs.close();
                 std::cout << "  -> " << commonPath.string() << std::endl;
             }
@@ -348,7 +371,7 @@ static int TranslateAndDumpHlsl(const ShaderProjectData& data,
         // CubeMap pass
         if (data.hasCubeMapPass) {
             auto chTypes = getChannelTypes(data.cubeMapPass);
-            dumpPass(data.cubeMapPass.code, "cube_a.hlsl", chTypes, true);
+            dumpPass(data.cubeMapPass.code, "cube_a.hlsl", chTypes, true, "Cube A");
         }
 
         // Buffer passes
@@ -358,13 +381,13 @@ static int TranslateAndDumpHlsl(const ShaderProjectData& data,
             fname += static_cast<char>('a' + bi);
             fname += ".hlsl";
             auto chTypes = getChannelTypes(bp);
-            dumpPass(bp.code, fname, chTypes, false);
+            dumpPass(bp.code, fname, chTypes, false, bp.name);
         }
 
         // Image pass
         {
             auto chTypes = getChannelTypes(data.imagePass);
-            dumpPass(data.imagePass.code, "image.hlsl", chTypes, false);
+            dumpPass(data.imagePass.code, "image.hlsl", chTypes, false, "Image");
         }
     }
 
@@ -405,7 +428,7 @@ int main(int argc, char* argv[]) {
         fs::path outDir = isMulti ? (logDir / shaderName) : logDir;
 
         std::cout << "Translating GLSL -> HLSL: " << config.shaderPath << std::endl;
-        int compileErrors = TranslateAndDumpHlsl(data, shaderName, outDir);
+        int compileErrors = TranslateAndDumpHlsl(data, shaderName, outDir, config.shaderPath);
 
         std::cout << "Translation complete, output: " << outDir.string() << std::endl;
         if (compileErrors > 0) {
@@ -417,7 +440,17 @@ int main(int argc, char* argv[]) {
     }
 
     // 根据模式初始化日志文件（wallpaper.log / window.log）
-    InitLogFile(config.wallpaperMode);
+    InitLogFile(config.wallpaperMode, config.quiet);
+
+    // 日志开头写完整命令行，方便复制重新运行
+    {
+        std::string cmdLine;
+        for (int i = 0; i < argc; ++i) {
+            if (i > 0) cmdLine += ' ';
+            cmdLine += argv[i];
+        }
+        std::cout << "Command: " << cmdLine << std::endl;
+    }
 
     // ============================================================
     // 初始化 SDL
@@ -1022,7 +1055,7 @@ int main(int argc, char* argv[]) {
             std::string subDir = config.wallpaperMode ? "wallpaper-mode" : "window-mode";
             fs::path outDir = GetLogDir() / subDir / sName;
             std::cout << "HLSL dump (" << subDir << "): " << config.shaderPath << std::endl;
-            int errors = TranslateAndDumpHlsl(project.GetData(), sName, outDir);
+            int errors = TranslateAndDumpHlsl(project.GetData(), sName, outDir, config.shaderPath);
             if (errors > 0) {
                 std::cerr << "WARNING: " << errors << " pass(es) had HLSL compile errors." << std::endl;
             }
@@ -1049,7 +1082,7 @@ int main(int argc, char* argv[]) {
         std::string subDir = config.wallpaperMode ? "wallpaper-mode" : "window-mode";
         fs::path outDir = GetLogDir() / subDir / shaderName;
         std::cout << "HLSL dump (" << subDir << "): " << config.shaderPath << std::endl;
-        int errors = TranslateAndDumpHlsl(project.GetData(), shaderName, outDir);
+        int errors = TranslateAndDumpHlsl(project.GetData(), shaderName, outDir, config.shaderPath);
         if (errors > 0) {
             std::cerr << "WARNING: " << errors << " pass(es) had HLSL compile errors." << std::endl;
         }
