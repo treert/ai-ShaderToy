@@ -12,6 +12,7 @@
 - `assets/` — 资源文件（着色器等）
 - `third_party/` — 第三方依赖（git submodule：SDL2、GLAD、ImGui、nlohmann/json）
 - `Docs/` — 项目知识库（技术文档，供 AI 读写，也供用户查阅）
+  - `Docs/疑难问题记录/` — 疑难问题排查记录（OpenGL/D3D11/Windows 平台相关的问题根因分析与解决方案）
 - `tools/` — 辅助工具（json2dir.py 等）
 
 ## 开发阶段
@@ -110,3 +111,4 @@
 - [x] --quiet 静默模式（不输出到控制台，只写日志文件）
 - [x] 日志文件开头记录完整命令行（方便复制重跑）
 - [x] HLSL 文件来源注释（标注源 shader 路径和 pass 名，提醒不要手改）
+- [x] 多进程帧率降半修复（DXGI ALLOW_TEARING + SetMaximumFrameLatency + 高精度可等待定时器替代 SDL_Delay）

@@ -2240,10 +2240,48 @@ int main(int argc, char* argv[]) {
                 frameTimeCount = 0;
             }
 
-            // 帧率控制：用总耗时（含 VSync）来补足剩余等待
+            // 帧率控制：高精度等待
+            // Windows 后台进程的 Sleep/SDL_Delay 精度不可靠（可能从 1ms 降到 15.6ms），
+            // 导致两个 D3D11 进程同时运行时壁纸帧率减半。
+            // 方案：Windows 高精度可等待定时器 + spin-wait 尾部精确补齐。
             float targetFrameTime = 1.0f / adaptiveFPS;
-            if (frameElapsed < targetFrameTime) {
-                SDL_Delay(static_cast<Uint32>((targetFrameTime - frameElapsed) * 1000.0f));
+            {
+                Uint64 spinNow = SDL_GetPerformanceCounter();
+                float elapsed = static_cast<float>(spinNow - now) / static_cast<float>(freq);
+                float remaining = targetFrameTime - elapsed;
+
+#ifdef _WIN32
+                // Phase 1: 高精度定时器等待（不消耗 CPU，精度 ~0.5ms）
+                if (remaining > 0.002f) {
+                    static HANDLE hTimer = CreateWaitableTimerExW(
+                        nullptr, nullptr,
+                        CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+                    if (hTimer) {
+                        // 负值 = 相对时间，单位 100ns
+                        LARGE_INTEGER dueTime;
+                        dueTime.QuadPart = -static_cast<LONGLONG>((remaining - 0.001f) * 10000000.0f);
+                        if (SetWaitableTimerEx(hTimer, &dueTime, 0, nullptr, nullptr, nullptr, 0)) {
+                            WaitForSingleObject(hTimer, static_cast<DWORD>(remaining * 1000.0f) + 1);
+                        }
+                    } else {
+                        // Fallback: 高精度定时器不可用（Windows 10 1803 以下）
+                        int sleepMs = static_cast<int>((remaining - 0.002f) * 1000.0f);
+                        if (sleepMs > 0) SDL_Delay(static_cast<Uint32>(sleepMs));
+                    }
+                }
+#else
+                // Non-Windows: 使用 SDL_Delay
+                if (remaining > 0.002f) {
+                    int sleepMs = static_cast<int>((remaining - 0.002f) * 1000.0f);
+                    if (sleepMs > 0) SDL_Delay(static_cast<Uint32>(sleepMs));
+                }
+#endif
+                // Phase 2: Spin-wait — 精确等待剩余时间
+                while (true) {
+                    Uint64 spinEnd = SDL_GetPerformanceCounter();
+                    float totalElapsed = static_cast<float>(spinEnd - now) / static_cast<float>(freq);
+                    if (totalElapsed >= targetFrameTime) break;
+                }
             }
         }
     }

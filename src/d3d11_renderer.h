@@ -4,6 +4,7 @@
 
 #include <d3d11.h>
 #include <dxgi1_2.h>
+#include <dxgi1_5.h>
 #include <wrl/client.h>
 #include <vector>
 #include <string>
@@ -78,6 +79,8 @@ private:
     ComPtr<ID3D11Device> device_;
     ComPtr<ID3D11DeviceContext> context_;
     ComPtr<IDXGIFactory2> dxgiFactory_;
+
+    bool tearingSupported_ = false;  // DXGI Allow Tearing support (bypass DWM throttling)
 
     // 全屏三角形 VS（所有 pass 共享）
     ComPtr<ID3D11VertexShader> fullscreenVS_;

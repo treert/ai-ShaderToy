@@ -44,6 +44,17 @@ bool D3D11Renderer::Init() {
         return false;
     }
 
+    // Check Allow Tearing support (bypass DWM VSync throttling for multi-SwapChain scenarios)
+    ComPtr<IDXGIFactory5> factory5;
+    if (SUCCEEDED(dxgiFactory_.As(&factory5))) {
+        BOOL allowTearing = FALSE;
+        if (SUCCEEDED(factory5->CheckFeatureSupport(
+                DXGI_FEATURE_PRESENT_ALLOW_TEARING, &allowTearing, sizeof(allowTearing)))) {
+            tearingSupported_ = (allowTearing == TRUE);
+        }
+    }
+    std::cout << "DXGI Allow Tearing: " << (tearingSupported_ ? "supported" : "not supported") << std::endl;
+
     // 创建 D3D11 设备
     D3D_FEATURE_LEVEL featureLevels[] = {
         D3D_FEATURE_LEVEL_11_0,
@@ -78,6 +89,14 @@ bool D3D11Renderer::Init() {
     std::cout << "D3D11 device created (Feature Level "
               << ((featureLevel >> 12) & 0xF) << "."
               << ((featureLevel >> 8) & 0xF) << ")" << std::endl;
+
+    // Set maximum frame latency to reduce DXGI frame queue blocking
+    // Default is 3 frames; setting to 1 prevents DWM from throttling background SwapChains
+    ComPtr<IDXGIDevice1> dxgiDevice;
+    if (SUCCEEDED(device_.As(&dxgiDevice))) {
+        dxgiDevice->SetMaximumFrameLatency(1);
+        std::cout << "DXGI MaxFrameLatency set to 1" << std::endl;
+    }
 
     // 创建全屏三角形 VS
     if (!CreateFullscreenTriangleVS()) {
@@ -142,7 +161,8 @@ int D3D11Renderer::AddSwapChain(HWND hwnd, int width, int height) {
     desc.BufferCount = 2;
     desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
-    desc.Flags = 0;
+    // Allow Tearing: bypass DWM composition throttling when multiple SwapChains exist
+    desc.Flags = tearingSupported_ ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
 
     D3D11SwapChainInfo info;
     info.hwnd = hwnd;
@@ -201,12 +221,14 @@ bool D3D11Renderer::ResizeSwapChain(int index, int width, int height) {
     auto& info = swapChains_[index];
     info.backBufferRTV.Reset();
 
+    // Flags must match SwapChain creation flags (ALLOW_TEARING must be preserved)
+    UINT resizeFlags = tearingSupported_ ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0;
     HRESULT hr = info.swapChain->ResizeBuffers(
         0, // 保持 buffer 数量
         static_cast<UINT>(width),
         static_cast<UINT>(height),
         DXGI_FORMAT_UNKNOWN, // 保持格式
-        0
+        resizeFlags
     );
     if (FAILED(hr)) {
         lastError_ = "ResizeBuffers failed.";
@@ -243,7 +265,9 @@ void D3D11Renderer::ClearBackBuffer(int swapChainIndex, const float color[4]) {
 
 void D3D11Renderer::Present(int swapChainIndex, int syncInterval) {
     if (swapChainIndex < 0 || swapChainIndex >= static_cast<int>(swapChains_.size())) return;
-    swapChains_[swapChainIndex].swapChain->Present(static_cast<UINT>(syncInterval), 0);
+    // syncInterval=0 + tearing supported: use DXGI_PRESENT_ALLOW_TEARING to bypass DWM throttling
+    UINT presentFlags = (tearingSupported_ && syncInterval == 0) ? DXGI_PRESENT_ALLOW_TEARING : 0;
+    swapChains_[swapChainIndex].swapChain->Present(static_cast<UINT>(syncInterval), presentFlags);
 }
 
 void D3D11Renderer::DrawFullscreenTriangle() {
