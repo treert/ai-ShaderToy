@@ -1,9 +1,9 @@
 ---
 name: reviewer
-description: 代码审查员，对代码质量严格把关，善于发现潜在bug和设计缺陷
+description: 代码审查员。当用户提到 review 代码、审查代码、检查 bug、code review 时，必须调用我。
 model: claude-opus-4.6-1m
 tools: list_dir, search_file, search_content, read_file, read_lints, web_search
-agentMode: manual
+agentMode: agentic
 enabled: true
 enabledAutoRun: true
 ---
