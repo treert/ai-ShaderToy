@@ -112,3 +112,13 @@
 - [x] 日志文件开头记录完整命令行（方便复制重跑）
 - [x] HLSL 文件来源注释（标注源 shader 路径和 pass 名，提醒不要手改）
 - [x] 多进程帧率降半修复（DXGI ALLOW_TEARING + SetMaximumFrameLatency + 高精度可等待定时器替代 SDL_Delay）
+
+### 阶段 7：.stoy 自定义 Shader 格式 🔧 进行中
+**目标**：设计并实现 `.stoy` 自定义 shader 描述格式，替代 shadertoy.com JSON 格式，支持具名纹理、多 Pass、内置变量声明等
+- [x] .stoy 文件格式设计（Docs/stoy文件格式设计.md）
+- [x] BNF 语法规范（Docs/stoy_grammar.bnf，用于 VSCode 语法高亮插件）
+- [ ] .stoy 解析器（parser）实现
+- [ ] .stoy 示例文件
+- [ ] HLSL 代码注入（inner_vars / texture / pass 自动注入）
+- [ ] 渲染管线集成（ShaderProject 支持 .stoy 格式加载）
+- [ ] VSCode 语法高亮插件

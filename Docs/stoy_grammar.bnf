@@ -1,0 +1,244 @@
+(* ============================================================ *)
+(* .stoy File Format — BNF Grammar                             *)
+(* Version: 1.0                                                 *)
+(* Description: Grammar specification for ai-ShaderToy's        *)
+(*              custom shader description format.                *)
+(* Usage: Reference for building VSCode syntax highlighting      *)
+(*        (TextMate grammar / Monarch tokenizer).                *)
+(* ============================================================ *)
+
+(* ============================================================ *)
+(* Top-Level Structure                                           *)
+(* ============================================================ *)
+
+<stoy-file>         ::= { <top-level-element> }
+
+<top-level-element> ::= <comment>
+                       | <global-setting>
+                       | <inner-vars>
+                       | <texture-decl>
+                       | <common-block>
+                       | <pass-block>
+
+(* ============================================================ *)
+(* Comments                                                      *)
+(* ============================================================ *)
+
+<comment>           ::= "--" <non-newline-char>* <newline>
+
+(* ============================================================ *)
+(* Global Setting Block                                          *)
+(* ============================================================ *)
+
+<global-setting>    ::= "global_setting" "{" { <setting-entry> } "}"
+
+<setting-entry>     ::= <identifier> "=" <setting-value> [ <comment> ]
+
+<setting-value>     ::= <string-literal>
+                       | <number-literal>
+                       | <boolean-literal>
+
+(* ============================================================ *)
+(* Inner Vars Block                                              *)
+(* ============================================================ *)
+
+<inner-vars>        ::= "inner_vars" "{" { <inner-var-entry> } "}"
+
+<inner-var-entry>   ::= <builtin-var-name> [ <comment> ]
+
+<builtin-var-name>  ::= "iResolution"
+                       | "iTime"
+                       | "iTimeDelta"
+                       | "iFrame"
+                       | "iFrameRate"
+                       | "iMouse"
+                       | "iDate"
+                       | "iSampleRate"
+
+(* ============================================================ *)
+(* Texture Declaration                                           *)
+(* ============================================================ *)
+
+<texture-decl>      ::= "texture" <identifier> "=" <string-literal> [ <texture-config> ]
+
+<texture-config>    ::= "{" { <texture-entry> } "}"
+
+<texture-entry>     ::= <texture-key> "=" <string-literal> [ <comment> ]
+
+<texture-key>       ::= "filter"
+                       | "wrap"
+                       | "type"
+
+(* filter values: "linear" | "point"                             *)
+(* wrap values:   "repeat" | "clamp" | "mirror"                  *)
+(* type values:   "texture2d" | "cubemap"  (reserved for future) *)
+
+(* ============================================================ *)
+(* Common Block                                                  *)
+(* ============================================================ *)
+
+<common-block>      ::= "common" <long-string>
+
+(* ============================================================ *)
+(* Pass Block                                                    *)
+(* ============================================================ *)
+
+<pass-block>        ::= "pass" <identifier> "{" <pass-body> "}"
+
+<pass-body>         ::= { <pass-config> | <comment> } <pass-code> { <comment> }
+                       (* 'code' block is REQUIRED in every pass *)
+
+<pass-config>       ::= <init-config>
+
+<init-config>       ::= "init" "=" <init-value>
+
+<init-value>        ::= <float4-literal>
+                       | "texture" <string-literal>
+
+<pass-code>         ::= "code" <long-string>
+
+(* ============================================================ *)
+(* Literals                                                      *)
+(* ============================================================ *)
+
+<float4-literal>    ::= "float4" "(" <number> "," <number> "," <number> "," <number> ")"
+
+<string-literal>    ::= '"' <string-char>* '"'
+
+<long-string>       ::= "[" { "=" } "[" <any-char>* "]" { "=" } "]"
+                       (* Lua-style long string: [=[ ... ]=]     *)
+                       (* The number of '=' must match on both   *)
+                       (* sides. Common forms:                   *)
+                       (*   [=[ ... ]=]   (one '=')              *)
+                       (*   [==[ ... ]==]  (two '=')             *)
+
+<number-literal>    ::= <number>
+
+<boolean-literal>   ::= "true" | "false"
+
+<number>            ::= [ "-" ] <digit>+ [ "." <digit>+ ]
+
+<identifier>        ::= <letter-or-underscore> { <letter-or-underscore> | <digit> }
+
+(* ============================================================ *)
+(* Character Classes                                             *)
+(* ============================================================ *)
+
+<letter-or-underscore> ::= "a" | "b" | ... | "z"
+                         | "A" | "B" | ... | "Z"
+                         | "_"
+
+<digit>             ::= "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"
+
+<string-char>       ::= <string-literal-char>
+                       | "\\" <escape-char>
+
+<escape-char>       ::= '"' | "\\" | "n" | "t" | "r"
+
+<newline>           ::= LF | CR LF
+                       (* LF = U+000A, CR = U+000D *)
+
+<non-newline-char>  ::= (* any character except LF and CR *)
+
+<string-literal-char> ::= (* any character except '"' and '\' *)
+
+<any-char>          ::= (* any character *)
+
+(* ============================================================ *)
+(* Uniqueness & Singleton Constraints                            *)
+(* ============================================================ *)
+(*                                                               *)
+(* - At most ONE <global-setting> block per file                 *)
+(* - At most ONE <inner-vars> block per file                     *)
+(* - At most ONE <common-block> per file                         *)
+(* - At least ONE <pass-block> per file                          *)
+(* - Each <pass-block> MUST contain exactly one <pass-code>      *)
+(* - All <identifier> used in pass and texture names must be     *)
+(*   globally unique (no duplicates across pass and texture)     *)
+(*                                                               *)
+(* ============================================================ *)
+
+(* ============================================================ *)
+(* Reserved Names (cannot be used as pass or texture names)      *)
+(* ============================================================ *)
+(*                                                               *)
+(* .stoy keywords:                                               *)
+(*   global_setting, inner_vars, texture, common, pass,          *)
+(*   init, code, float4, true, false                             *)
+(*                                                               *)
+(* Built-in variable names:                                      *)
+(*   iResolution, iTime, iTimeDelta, iFrame, iFrameRate,         *)
+(*   iMouse, iDate, iSampleRate                                  *)
+(*                                                               *)
+(* HLSL keywords and built-in types (partial list):              *)
+(*   float, float2, float3, float4, int, int2, int3, int4,      *)
+(*   uint, uint2, uint3, uint4, bool, half, double, void,       *)
+(*   return, if, else, for, while, do, switch, case, break,     *)
+(*   continue, discard, struct, cbuffer, static, const,          *)
+(*   inout, in, out, Texture2D, Texture3D, TextureCube,         *)
+(*   SamplerState, SV_Position, SV_Target0, register,           *)
+(*   main, mainImage                                             *)
+(*                                                               *)
+(* ============================================================ *)
+
+(* ============================================================ *)
+(* File Path Resolution                                          *)
+(* ============================================================ *)
+(*                                                               *)
+(* All file paths (texture paths, init texture paths) are        *)
+(* resolved RELATIVE to the directory containing the .stoy file. *)
+(*                                                               *)
+(* ============================================================ *)
+
+(* ============================================================ *)
+(* Keyword Summary                                               *)
+(* ============================================================ *)
+(*                                                               *)
+(* Top-level keywords:                                           *)
+(*   global_setting, inner_vars, texture, common, pass           *)
+(*                                                               *)
+(* Pass-level keywords:                                          *)
+(*   init, code                                                  *)
+(*                                                               *)
+(* Init-value keywords:                                          *)
+(*   float4, texture                                             *)
+(*                                                               *)
+(* Boolean keywords:                                             *)
+(*   true, false                                                 *)
+(*                                                               *)
+(* Built-in variable names (inner_vars):                         *)
+(*   iResolution, iTime, iTimeDelta, iFrame,                     *)
+(*   iFrameRate, iMouse, iDate, iSampleRate                      *)
+(*                                                               *)
+(* Texture config keys:                                          *)
+(*   filter, wrap, type                                          *)
+(*                                                               *)
+(* Setting config keys (extensible):                             *)
+(*   format, msaa, vsync, resolution_scale                       *)
+(*                                                               *)
+(* ============================================================ *)
+
+(* ============================================================ *)
+(* Token Classification (for syntax highlighting)                *)
+(* ============================================================ *)
+(*                                                               *)
+(* | Token Category    | Tokens                                | *)
+(* |-------------------|---------------------------------------| *)
+(* | keyword.control   | global_setting, inner_vars, texture,  | *)
+(* |                   | common, pass, init, code              | *)
+(* | keyword.type      | float4                                | *)
+(* | constant.language | true, false                           | *)
+(* | variable.builtin  | iResolution, iTime, iTimeDelta,       | *)
+(* |                   | iFrame, iFrameRate, iMouse, iDate,    | *)
+(* |                   | iSampleRate                           | *)
+(* | variable.property | filter, wrap, type, format, msaa,     | *)
+(* |                   | vsync, resolution_scale               | *)
+(* | string.quoted     | "..." string literals                 | *)
+(* | string.long       | [=[ ... ]=] long strings (embedded    | *)
+(* |                   | HLSL code)                            | *)
+(* | constant.numeric  | number literals                       | *)
+(* | entity.name       | identifier after 'pass' or 'texture'  | *)
+(* | comment.line      | -- ...                                | *)
+(* | punctuation       | { } ( ) = ,                           | *)
+(*                                                               *)
+(* ============================================================ *)
