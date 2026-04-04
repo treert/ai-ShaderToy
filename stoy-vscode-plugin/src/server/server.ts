@@ -13,6 +13,7 @@ import {
     CompletionParams,
     HoverParams,
     DefinitionParams,
+    DocumentSymbolParams,
 } from 'vscode-languageserver/node';
 
 import { TextDocument } from 'vscode-languageserver-textdocument';
@@ -24,6 +25,7 @@ import { provideDslDiagnostics } from './dslDiagnosticsProvider';
 import { provideHlslHover } from './hlslHoverProvider';
 import { provideHlslCompletions } from './hlslCompletionProvider';
 import { provideHlslDefinition } from './hlslDefinitionProvider';
+import { provideDocumentSymbols } from './documentSymbolProvider';
 import { StoyDocument } from '../types';
 import { scanHlslSymbols, HlslSymbol } from '../hlslSymbolScanner';
 
@@ -52,6 +54,7 @@ connection.onInitialize((_params: InitializeParams): InitializeResult => {
             },
             hoverProvider: true,
             definitionProvider: true,
+            documentSymbolProvider: true,
         },
     };
 });
@@ -126,6 +129,17 @@ connection.onDefinition((params: DefinitionParams) => {
     }
 
     return provideDslDefinition(doc, textDoc, params.position);
+});
+
+// ---- 文档大纲 (Outline) ----
+
+connection.onDocumentSymbol((params: DocumentSymbolParams) => {
+    const textDoc = documents.get(params.textDocument.uri);
+    if (!textDoc) return [];
+
+    const doc = docManager.getDocument(params.textDocument.uri, textDoc.getText());
+    const symbols = symbolCache.get(params.textDocument.uri) ?? [];
+    return provideDocumentSymbols(doc, symbols);
 });
 
 // ---- 启动 ----

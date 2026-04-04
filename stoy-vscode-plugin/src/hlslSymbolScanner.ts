@@ -19,6 +19,8 @@ export interface HlslSymbol {
     line: number;
     /** 符号在物理文件中的列号（0-based） */
     col: number;
+    /** 符号定义结束行（0-based），用于 function/struct 的完整范围 */
+    endLine?: number;
     /** 符号所在块类型 */
     source: 'common' | 'pass';
     /** 如果是 pass 中的符号，pass 名称 */
@@ -139,12 +141,14 @@ function scanCodeBlock(
         if (structMatch) {
             const structName = structMatch[1];
             const members = parseStructMembers(lines, i + 1);
+            const structEndIdx = findStructEnd(lines, i);
             symbols.push({
                 name: structName,
                 kind: 'struct',
                 signature: `struct ${structName}`,
                 line: physLine,
                 col: line.indexOf(structName),
+                endLine: structEndIdx >= 0 ? startLine + structEndIdx : physLine,
                 source,
                 passName,
                 members: members.map(m => ({
@@ -178,6 +182,7 @@ function scanCodeBlock(
                 signature: `${retType} ${funcName}(${params})`,
                 line: physLine,
                 col: line.indexOf(funcName),
+                endLine: funcBodyEnd >= 0 ? startLine + funcBodyEnd : physLine,
                 source,
                 passName,
             });
@@ -221,6 +226,7 @@ function scanCodeBlock(
                 signature: `${retType} ${funcName}(${params.trim()})`,
                 line: physLine,
                 col: line.indexOf(funcName),
+                endLine: funcBodyEnd >= 0 ? startLine + funcBodyEnd : physLine,
                 source,
                 passName,
             });
@@ -289,6 +295,18 @@ function parseStructMembers(lines: string[], startIdx: number): HlslSymbol[] {
     }
 
     return members;
+}
+
+/**
+ * 从 struct 声明行开始，找到 }; 结束行（相对于 lines 数组的索引）。
+ * 返回 -1 表示未找到。
+ */
+function findStructEnd(lines: string[], startIdx: number): number {
+    for (let i = startIdx + 1; i < lines.length; i++) {
+        const trimmed = lines[i].trim();
+        if (trimmed.startsWith('}')) return i;
+    }
+    return -1;
 }
 
 const CONTROL_KEYWORDS = new Set([

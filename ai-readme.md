@@ -138,6 +138,7 @@
     - [x] HLSL hover 内置函数文档链接（点击跳转微软官方 HLSL Reference）
     - [x] HLSL completion（全部上述 + HLSL 关键字 + struct 成员）
     - [x] HLSL go-to-definition（用户符号 + texture/pass/inner_vars 跳转）
+    - [x] 文档大纲 Outline（DSL 顶层块 + HLSL 用户符号层级显示）
   - [x] Server 端 DSL/HLSL 路由（按光标位置自动切换 provider）
   - [x] 扩展主入口（Language Client + 配置驱动 middleware）
   - [x] HLSL provider 配置切换（`stoy.hlsl.provider` 设置项，builtin/externalLsp 两种模式）
