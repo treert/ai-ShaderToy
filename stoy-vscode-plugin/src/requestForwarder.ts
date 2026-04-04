@@ -9,7 +9,38 @@ import { VirtualDocProvider, buildVirtualUri, parseVirtualUri } from './virtualD
 import { physicalToVirtual, virtualToPhysical, isInBlockRange } from './positionMapper';
 
 export class RequestForwarder {
+    private openedDocs = new Set<string>();
+
     constructor(private virtualDocProvider: VirtualDocProvider) {}
+
+    /**
+     * 确保虚拟文档已被 VS Code 打开并识别为 HLSL 语言。
+     * 外部 HLSL 扩展只有在文档被加载后才能响应 executeCommand 请求。
+     */
+    private async ensureVirtualDocOpened(virtualUri: string): Promise<void> {
+        if (this.openedDocs.has(virtualUri)) return;
+        try {
+            const uri = vscode.Uri.parse(virtualUri);
+            const doc = await vscode.workspace.openTextDocument(uri);
+            // 确保文档被识别为 HLSL
+            if (doc.languageId !== 'hlsl') {
+                await vscode.languages.setTextDocumentLanguage(doc, 'hlsl');
+            }
+            this.openedDocs.add(virtualUri);
+        } catch (err) {
+            // 如果设置语言失败也不影响
+            console.error('[Stoy] ensureVirtualDocOpened error:', err);
+        }
+    }
+
+    /** 虚拟文档缓存失效时清除 opened 标记 */
+    invalidateOpened(physicalUri: string): void {
+        for (const key of this.openedDocs) {
+            if (key.includes(physicalUri)) {
+                this.openedDocs.delete(key);
+            }
+        }
+    }
 
     /**
      * 判断光标是否在 HLSL 代码块内，如果是则返回虚拟文档信息
@@ -73,6 +104,7 @@ export class RequestForwarder {
         triggerCharacter?: string,
     ): Promise<vscode.CompletionItem[] | vscode.CompletionList | undefined> {
         try {
+            await this.ensureVirtualDocOpened(virtualUri);
             const uri = vscode.Uri.parse(virtualUri);
             const result = await vscode.commands.executeCommand<vscode.CompletionList>(
                 'vscode.executeCompletionItemProvider',
@@ -94,14 +126,29 @@ export class RequestForwarder {
         virtualPosition: vscode.Position,
     ): Promise<vscode.Hover[] | undefined> {
         try {
+            await this.ensureVirtualDocOpened(virtualUri);
             const uri = vscode.Uri.parse(virtualUri);
+            console.log(`[Stoy] forwardHover: uri=${uri.toString()} scheme=${uri.scheme} line=${virtualPosition.line} char=${virtualPosition.character}`);
+            
+            // 检查虚拟文档内容
+            const openDoc = vscode.workspace.textDocuments.find(d => d.uri.toString() === uri.toString());
+            if (openDoc) {
+                console.log(`[Stoy] Virtual doc found: languageId=${openDoc.languageId} lines=${openDoc.lineCount}`);
+                const targetLine = openDoc.lineAt(virtualPosition.line).text;
+                console.log(`[Stoy] Target line: "${targetLine}"`);
+            } else {
+                console.log(`[Stoy] Virtual doc NOT found in workspace.textDocuments`);
+            }
+            
             const result = await vscode.commands.executeCommand<vscode.Hover[]>(
                 'vscode.executeHoverProvider',
                 uri,
                 virtualPosition,
             );
+            console.log(`[Stoy] forwardHover result: ${result ? `${result.length} hovers` : 'null/undefined'}`);
             return result;
-        } catch {
+        } catch (err) {
+            console.error(`[Stoy] forwardHover error:`, err);
             return undefined;
         }
     }
@@ -114,6 +161,7 @@ export class RequestForwarder {
         virtualPosition: vscode.Position,
     ): Promise<(vscode.Location | vscode.LocationLink)[] | undefined> {
         try {
+            await this.ensureVirtualDocOpened(virtualUri);
             const uri = vscode.Uri.parse(virtualUri);
             const result = await vscode.commands.executeCommand<(vscode.Location | vscode.LocationLink)[]>(
                 'vscode.executeDefinitionProvider',
@@ -134,6 +182,7 @@ export class RequestForwarder {
         virtualPosition: vscode.Position,
     ): Promise<vscode.Location[] | undefined> {
         try {
+            await this.ensureVirtualDocOpened(virtualUri);
             const uri = vscode.Uri.parse(virtualUri);
             const result = await vscode.commands.executeCommand<vscode.Location[]>(
                 'vscode.executeReferenceProvider',
@@ -155,6 +204,7 @@ export class RequestForwarder {
         triggerCharacter?: string,
     ): Promise<vscode.SignatureHelp | undefined> {
         try {
+            await this.ensureVirtualDocOpened(virtualUri);
             const uri = vscode.Uri.parse(virtualUri);
             const result = await vscode.commands.executeCommand<vscode.SignatureHelp>(
                 'vscode.executeSignatureHelpProvider',

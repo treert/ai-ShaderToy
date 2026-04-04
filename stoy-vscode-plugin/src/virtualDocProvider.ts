@@ -35,7 +35,8 @@ export class VirtualDocProvider implements vscode.TextDocumentContentProvider {
 
         // 清除该物理文件的所有虚拟文档缓存
         for (const [key] of this.virtualDocCache) {
-            if (key.includes(encodeURIComponent(physicalUri))) {
+            const parsed = parseVirtualUri(key);
+            if (parsed && parsed.physicalUri === physicalUri) {
                 this.virtualDocCache.delete(key);
                 this.virtualDocInfoCache.delete(key);
             }
@@ -135,12 +136,24 @@ export class VirtualDocProvider implements vscode.TextDocumentContentProvider {
 // URI 工具函数
 // ============================================================
 
+/**
+ * 用 base64url 编码物理 URI，避免 encodeURIComponent 导致的双重编码问题。
+ * URI 格式: stoy-hlsl://hlsl/<blockType>/<blockName>/<base64url>.hlsl
+ */
+function toBase64Url(str: string): string {
+    return Buffer.from(str, 'utf-8').toString('base64url');
+}
+
+function fromBase64Url(str: string): string {
+    return Buffer.from(str, 'base64url').toString('utf-8');
+}
+
 export function buildVirtualUri(physicalUri: string, blockType: string, blockName: string): string {
-    return `${VIRTUAL_SCHEME}://hlsl/${blockType}/${blockName}/${encodeURIComponent(physicalUri)}.hlsl`;
+    return `${VIRTUAL_SCHEME}://hlsl/${blockType}/${blockName}/${toBase64Url(physicalUri)}.hlsl`;
 }
 
 export function parseVirtualUri(uri: string): { physicalUri: string; blockType: string; blockName: string } | null {
-    // stoy-hlsl://hlsl/<blockType>/<blockName>/<encodedPhysicalUri>.hlsl
+    // stoy-hlsl://hlsl/<blockType>/<blockName>/<base64url>.hlsl
     const prefix = `${VIRTUAL_SCHEME}://hlsl/`;
     if (!uri.startsWith(prefix)) return null;
 
@@ -150,14 +163,18 @@ export function parseVirtualUri(uri: string): { physicalUri: string; blockType: 
 
     const blockType = parts[0];
     const blockName = parts[1];
-    let encodedUri = parts.slice(2).join('/');
-    if (encodedUri.endsWith('.hlsl')) {
-        encodedUri = encodedUri.slice(0, -5); // remove .hlsl suffix
+    let encoded = parts.slice(2).join('/');
+    if (encoded.endsWith('.hlsl')) {
+        encoded = encoded.slice(0, -5); // remove .hlsl suffix
     }
 
-    return {
-        physicalUri: decodeURIComponent(encodedUri),
-        blockType,
-        blockName,
-    };
+    try {
+        return {
+            physicalUri: fromBase64Url(encoded),
+            blockType,
+            blockName,
+        };
+    } catch {
+        return null;
+    }
 }

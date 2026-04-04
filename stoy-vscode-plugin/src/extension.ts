@@ -20,7 +20,11 @@ let client: LanguageClient;
 let virtualDocProvider: VirtualDocProvider;
 let requestForwarder: RequestForwarder;
 
+const outputChannel = vscode.window.createOutputChannel('Stoy Language');
+
 export function activate(context: vscode.ExtensionContext) {
+    outputChannel.appendLine('[Stoy] Extension activating...');
+
     // 1. 注册虚拟文档提供者
     virtualDocProvider = new VirtualDocProvider();
     context.subscriptions.push(
@@ -50,7 +54,7 @@ export function activate(context: vscode.ExtensionContext) {
     const serverModule = context.asAbsolutePath(path.join('out', 'server.js'));
     const serverOptions: ServerOptions = {
         run: { module: serverModule, transport: TransportKind.ipc },
-        debug: { module: serverModule, transport: TransportKind.ipc },
+        debug: { module: serverModule, transport: TransportKind.ipc, options: { execArgv: ['--nolazy', '--inspect=6009'] } },
     };
 
     // 5. Middleware — 拦截 HLSL 区域请求并转发
@@ -71,12 +75,15 @@ export function activate(context: vscode.ExtensionContext) {
             return next(document, position, context, token);
         },
         provideHover: async (document, position, token, next) => {
+            outputChannel.appendLine(`[Stoy] Hover request at ${document.uri.toString()} line=${position.line} char=${position.character}`);
             const hlslResult = tryForwardToHlsl(document, position);
             if (hlslResult) {
+                outputChannel.appendLine(`[Stoy] -> In HLSL block, forwarding to ${hlslResult.virtualUri} vLine=${hlslResult.virtualPosition.line}`);
                 const hovers = await requestForwarder.forwardHover(
                     hlslResult.virtualUri,
                     hlslResult.virtualPosition,
                 );
+                outputChannel.appendLine(`[Stoy] -> Forward result: ${hovers ? hovers.length + ' hovers' : 'null/undefined'}`);
                 if (hovers && hovers.length > 0) {
                     const hover = hovers[0];
                     // B5: 映射悬停结果中的 range
@@ -97,6 +104,7 @@ export function activate(context: vscode.ExtensionContext) {
                     return hover;
                 }
             }
+            outputChannel.appendLine(`[Stoy] -> Not in HLSL block, delegating to Language Server`);
             return next(document, position, token);
         },
         provideDefinition: async (document, position, token, next) => {
@@ -127,7 +135,13 @@ export function activate(context: vscode.ExtensionContext) {
         clientOptions,
     );
 
-    client.start();
+    client.start().then(() => {
+        outputChannel.appendLine('[Stoy] Language Server started successfully');
+    }, (err) => {
+        outputChannel.appendLine(`[Stoy] Language Server failed to start: ${err}`);
+    });
+
+    outputChannel.appendLine('[Stoy] Extension activated');
 }
 
 export function deactivate(): Thenable<void> | undefined {

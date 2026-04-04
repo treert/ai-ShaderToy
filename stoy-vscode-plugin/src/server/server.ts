@@ -34,6 +34,7 @@ const docManager = new DocumentManager();
 // ---- 初始化 ----
 
 connection.onInitialize((params: InitializeParams): InitializeResult => {
+    connection.console.log('[Stoy Server] Initializing...');
     return {
         capabilities: {
             textDocumentSync: TextDocumentSyncKind.Full,
@@ -52,6 +53,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
 documents.onDidChangeContent(change => {
     const uri = change.document.uri;
     const text = change.document.getText();
+    connection.console.log(`[Stoy Server] Document changed: ${uri} (${text.length} chars)`);
 
     docManager.onDocumentChanged(uri, text, (doc) => {
         const diagnostics = provideDslDiagnostics(doc);
@@ -77,6 +79,7 @@ connection.onCompletion((params: CompletionParams) => {
 // ---- 悬停 ----
 
 connection.onHover((params: HoverParams) => {
+    connection.console.log(`[Stoy Server] Hover at line=${params.position.line} char=${params.position.character}`);
     const textDoc = documents.get(params.textDocument.uri);
     if (!textDoc) return null;
 
