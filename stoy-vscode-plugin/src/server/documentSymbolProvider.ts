@@ -55,14 +55,18 @@ export function provideDocumentSymbols(
 
         const children: DocumentSymbol[] = [...enabledChildren];
 
-        // 未启用的放到单独子树
+        // 未启用的放到单独子树（range 设到块末尾，确保 Position 排序在已启用变量之后）
         if (disabledChildren.length > 0) {
-            const r = toRange(doc.innerVars.range);
+            const endR = Range.create(
+                doc.innerVars.range.endLine, 0,
+                doc.innerVars.range.endLine, doc.innerVars.range.endCol,
+            );
             children.push({
                 name: `可用变量 (未启用 ${disabledChildren.length} 个)`,
                 kind: SymbolKind.Enum,
-                range: r,
-                selectionRange: r,
+                range: endR,
+                selectionRange: endR,
+                tags: [SymbolTag.Deprecated],
                 children: disabledChildren,
             });
         }
