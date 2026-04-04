@@ -144,6 +144,7 @@
     - [x] 文档大纲 Outline（DSL 顶层块 + HLSL 用户符号层级显示）
     - [x] Outline inner_vars 显示所有内置变量（已声明正常 / 未声明灰色+标注）
     - [x] Semantic Token 内置变量高亮（LSP 语义着色覆盖 TextMate，inner_vars + HLSL 代码块中 iTime/iResolution 等精确染色）
+    - [x] Semantic Token pass/texture 名称及衍生变量高亮（pass name、texture name 及 _Sampler/_TexelSize 衍生变量在 DSL 声明和 HLSL 代码块中精确染色）
   - [x] Server 端 DSL/HLSL 路由（按光标位置自动切换 provider）
   - [x] 扩展主入口（Language Client + 配置驱动 middleware）
   - [x] HLSL provider 配置切换（`stoy.hlsl.provider` 设置项，builtin/externalLsp 两种模式）

@@ -69,6 +69,9 @@
                 "scopes": {
                     "variable.readonly.defaultLibrary": [
                         "support.variable"
+                    ],
+                    "variable.readonly": [
+                        "entity.name.type"
                     ]
                 }
             }
@@ -77,21 +80,24 @@
             "[*Dark*]": {
                 "editor.semanticTokenColorCustomizations": {
                     "rules": {
-                        "variable.readonly.defaultLibrary:stoy": "#4FC1FF"
+                        "variable.readonly.defaultLibrary:stoy": "#4FC1FF",
+                        "variable.readonly:stoy": "#4EC9B0"
                     }
                 }
             },
             "[*Light*]": {
                 "editor.semanticTokenColorCustomizations": {
                     "rules": {
-                        "variable.readonly.defaultLibrary:stoy": "#0070C1"
+                        "variable.readonly.defaultLibrary:stoy": "#0070C1",
+                        "variable.readonly:stoy": "#267F99"
                     }
                 }
             },
             "[*High Contrast*]": {
                 "editor.semanticTokenColorCustomizations": {
                     "rules": {
-                        "variable.readonly.defaultLibrary:stoy": "#4FC1FF"
+                        "variable.readonly.defaultLibrary:stoy": "#4FC1FF",
+                        "variable.readonly:stoy": "#4EC9B0"
                     }
                 }
             }
