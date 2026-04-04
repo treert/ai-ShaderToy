@@ -46,10 +46,13 @@ public:
                        const std::string& shaderName, int monitorIndex);
 
     /// 设置 shader 文件列表和当前 shader 路径（用于右键菜单 shader 切换子菜单）
+    /// isStoyMode=true 时只显示 stoyFiles 列表
     void SetShaderList(const std::vector<std::string>& glslFiles,
                        const std::vector<std::string>& jsonFiles,
                        const std::vector<std::string>& dirFiles,
-                       const std::string& currentShader);
+                       const std::vector<std::string>& stoyFiles,
+                       const std::string& currentShader,
+                       bool isStoyMode = false);
 
     /// 设置调试信息显示状态（影响菜单勾选标记）
     void SetDebugState(bool showDebug);
@@ -73,6 +76,8 @@ private:
     std::vector<std::string> glslFiles_;
     std::vector<std::string> jsonFiles_;
     std::vector<std::string> dirFiles_;
+    std::vector<std::string> stoyFiles_;
+    bool isStoyMode_ = false;
     bool showDebug_ = false;
 
     static TrayIcon* instance_;

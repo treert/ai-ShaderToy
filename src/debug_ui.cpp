@@ -232,7 +232,7 @@ void DebugUI::Render(DebugUIState& state) {
         }
 
         // ============================================================
-        // Shader 选择器（三组可折叠列表）
+        // Shader 选择器（根据模式显示不同列表）
         // ============================================================
         {
             auto renderGroup = [&](const char* label, const std::vector<std::string>& files,
@@ -272,9 +272,15 @@ void DebugUI::Render(DebugUIState& state) {
                 }
             };
 
-            renderGroup("GLSL Single File", state.glslFiles);
-            renderGroup("JSON (ShaderToy)", state.jsonFiles);
-            renderGroup("Directory (Multi-file)", state.dirFiles);
+            if (state.isStoyMode) {
+                // .stoy 模式：只显示 .stoy 文件列表
+                renderGroup("Stoy Shaders", state.stoyFiles);
+            } else {
+                // ShaderToy 模式：显示 GLSL / JSON / 目录三组
+                renderGroup("GLSL Single File", state.glslFiles);
+                renderGroup("JSON (ShaderToy)", state.jsonFiles);
+                renderGroup("Directory (Multi-file)", state.dirFiles);
+            }
         }
 
         // ============================================================

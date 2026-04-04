@@ -31,6 +31,8 @@
 #include "tray_icon.h"
 #include "debug_ui.h"
 #include "file_dialog.h"
+#include "stoy_parser.h"
+#include "stoy_hlsl_generator.h"
 
 #ifdef _WIN32
 #include "d3d11_renderer.h"
@@ -62,6 +64,7 @@ struct AppConfig {
     bool        hotReload = true;
     bool        translateMode = false; // 翻译模式：GLSL→HLSL 翻译后输出到 Logs 目录
     bool        useD3D11Mode = false; // 窗口模式使用 D3D11 渲染（--d3d11）
+    bool        isStoyMode = false;  // .stoy 模式（自动检测，与其他模式不兼容）
     bool        quiet = false;       // 静默模式：不输出到控制台，只写日志文件（--quiet）
     int         width  = kDefaultWidth;
     int         height = kDefaultHeight;
@@ -134,6 +137,9 @@ static std::string GetShaderDumpName(const std::string& shaderPath) {
     if (ext == ".json") {
         return name + "@json";
     }
+    if (ext == ".stoy") {
+        return name + "@stoy";
+    }
     return name;  // .glsl 等单文件，无后缀
 }
 
@@ -173,7 +179,7 @@ static void PrintUsage(const char* programName) {
     InitConsole();
     std::cout << "Usage: " << programName << " [options]\n"
               << "Options:\n"
-              << "  --shader <path>      Path to ShaderToy GLSL file (default: " << kDefaultShader << ")\n"
+              << "  --shader <path>      Path to shader file (.glsl/.json/.stoy) or directory (default: " << kDefaultShader << ")\n"
               << "  --channel0 <path>    iChannel0 texture image\n"
               << "  --channel1 <path>    iChannel1 texture image\n"
               << "  --channel2 <path>    iChannel2 texture image\n"
@@ -410,6 +416,23 @@ int main(int argc, char* argv[]) {
 #endif
 
     AppConfig config = ParseArgs(argc, argv);
+
+    // .stoy 模式自动检测：检测 shader 文件扩展名
+    {
+        namespace fs = std::filesystem;
+        std::string ext = fs::path(config.shaderPath).extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
+        if (ext == ".stoy") {
+            config.isStoyMode = true;
+            config.useD3D11Mode = true;  // .stoy 强制 D3D11
+        }
+    }
+
+    // .stoy 模式不支持翻译模式
+    if (config.isStoyMode && config.translateMode) {
+        std::cerr << "Error: --translate is not supported for .stoy files." << std::endl;
+        return 1;
+    }
 
     // ============================================================
     // 翻译模式：GLSL → HLSL 翻译后输出到 Logs 目录，然后退出
@@ -781,24 +804,68 @@ int main(int argc, char* argv[]) {
     }
 
     // ============================================================
-    // 加载 Shader 项目（支持单文件 .glsl / JSON / 目录三种模式）
+    // 加载 Shader 项目
+    // .stoy 模式和 ShaderToy 模式走完全独立的分支
     // ============================================================
-    ShaderProject project;
-    if (!project.Load(config.shaderPath)) {
-        std::cerr << "Failed to load shader project: " << project.GetLastError() << std::endl;
-        SDL_GL_DeleteContext(glContext);
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return 1;
-    }
 
-    // HLSL 原生模式必须搭配 --d3d11
-    if (project.GetData().isHlsl && !useD3D11) {
-        std::cerr << "Error: HLSL native shader requires --d3d11 mode." << std::endl;
-        SDL_GL_DeleteContext(glContext);
-        SDL_DestroyWindow(window);
-        SDL_Quit();
-        return 1;
+    // .stoy 专用数据（仅 .stoy 模式有效）
+    StoyFileData stoyData;
+    StoyHlslResult stoyHlsl;
+
+    ShaderProject project;  // ShaderToy 模式使用
+
+    if (config.isStoyMode) {
+        // ---- .stoy 独立分支 ----
+        StoyParser parser;
+        if (!parser.ParseFile(config.shaderPath)) {
+            std::cerr << "Failed to parse .stoy file: " << parser.GetError() << std::endl;
+            if (glContext) SDL_GL_DeleteContext(glContext);
+            SDL_DestroyWindow(window);
+            SDL_Quit();
+            return 1;
+        }
+        stoyData = parser.GetData();
+        stoyHlsl = StoyHlslGenerator::Generate(stoyData);
+
+        if (stoyHlsl.passHlsls.empty()) {
+            std::cerr << ".stoy: HLSL generation produced no passes" << std::endl;
+            if (glContext) SDL_GL_DeleteContext(glContext);
+            SDL_DestroyWindow(window);
+            SDL_Quit();
+            return 1;
+        }
+
+        std::cout << "Stoy mode: loaded '" << config.shaderPath << "' — "
+                  << stoyHlsl.passHlsls.size() << " pass(es)"
+                  << (stoyData.textures.empty() ? "" : " + " + std::to_string(stoyData.textures.size()) + " texture(s)")
+                  << std::endl;
+
+        // .stoy 必须使用 D3D11
+        if (!useD3D11) {
+            std::cerr << "Error: .stoy mode requires D3D11 renderer (--d3d11 or --wallpaper)." << std::endl;
+            if (glContext) SDL_GL_DeleteContext(glContext);
+            SDL_DestroyWindow(window);
+            SDL_Quit();
+            return 1;
+        }
+    } else {
+        // ---- ShaderToy 模式 ----
+        if (!project.Load(config.shaderPath)) {
+            std::cerr << "Failed to load shader project: " << project.GetLastError() << std::endl;
+            if (glContext) SDL_GL_DeleteContext(glContext);
+            SDL_DestroyWindow(window);
+            SDL_Quit();
+            return 1;
+        }
+
+        // HLSL 原生模式必须搭配 --d3d11
+        if (project.GetData().isHlsl && !useD3D11) {
+            std::cerr << "Error: HLSL native shader requires --d3d11 mode." << std::endl;
+            if (glContext) SDL_GL_DeleteContext(glContext);
+            SDL_DestroyWindow(window);
+            SDL_Quit();
+            return 1;
+        }
     }
 
     // ============================================================
@@ -863,8 +930,10 @@ int main(int argc, char* argv[]) {
         }
     };
 
-    const auto& projData = project.GetData();
-    if (!useD3D11) {
+    // .stoy 模式不使用 ShaderProject/projData，走独立的 D3D11 分支
+    static ShaderProjectData dummyProjData;  // .stoy 模式占位
+    const auto& projData = config.isStoyMode ? dummyProjData : project.GetData();
+    if (!useD3D11 && !config.isStoyMode) {
         LoadTexturesForProject(projData);
     }
 
@@ -954,7 +1023,7 @@ int main(int argc, char* argv[]) {
         return true;
     };
 
-    if (!useD3D11) {
+    if (!useD3D11 && !config.isStoyMode) {
         if (!SetupMultiPass(projData)) {
             std::cerr << "Failed to setup multi-pass renderer: " << multiPass.GetLastError() << std::endl;
             if (glContext) SDL_GL_DeleteContext(glContext);
@@ -964,13 +1033,14 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // D3D11 壁纸模式：配置 D3D11MultiPass
+    // D3D11 壁纸模式：配置 D3D11MultiPass（ShaderToy 模式专用）
 #ifdef _WIN32
     auto SetupD3D11MultiPass = [&](const ShaderProjectData& data) -> bool {
         if (!d3dMultiPass) return false;
         d3dMultiPass->Clear();
         d3dMultiPass->Init(config.width, config.height);
         d3dMultiPass->SetCommonSource(data.commonSource);
+        d3dMultiPass->SetStoyMode(false);
 
         // HLSL 原生模式需要的路径
         const bool hlsl = data.isHlsl;
@@ -1037,7 +1107,118 @@ int main(int argc, char* argv[]) {
         return true;
     };
 
-    // D3D11 纹理加载辅助函数（初始加载和热加载复用）
+    // ---- .stoy 独立分支：D3D11 配置 ----
+    auto SetupD3D11Stoy = [&]() -> bool {
+        if (!d3dMultiPass) return false;
+        d3dMultiPass->Clear();
+        d3dMultiPass->Init(config.width, config.height);
+        d3dMultiPass->SetCommonSource("");
+        d3dMultiPass->SetStoyMode(true);
+
+        namespace fs = std::filesystem;
+        fs::path sp(config.shaderPath);
+        std::string shaderDir = sp.parent_path().string();
+        std::string assetsDir = "assets";
+
+        int numPasses = (int)stoyHlsl.passHlsls.size();
+
+        // Buffer passes（除最后一个 pass 外）
+        for (int i = 0; i < numPasses - 1; i++) {
+            const auto& ph = stoyHlsl.passHlsls[i];
+            std::array<int, 4> inputs = {-1, -1, -1, -1};
+            std::array<ChannelType, 4> chTypes = {
+                ChannelType::Texture2D, ChannelType::Texture2D,
+                ChannelType::Texture2D, ChannelType::Texture2D };
+            if (d3dMultiPass->AddBufferPass(ph.passName, ph.hlslSource, inputs, chTypes,
+                                             true, shaderDir, assetsDir) < 0) return false;
+        }
+
+        // Image pass（最后一个 pass）
+        {
+            const auto& ph = stoyHlsl.passHlsls[numPasses - 1];
+            std::array<int, 4> inputs = {-1, -1, -1, -1};
+            std::array<ChannelType, 4> chTypes = {
+                ChannelType::Texture2D, ChannelType::Texture2D,
+                ChannelType::Texture2D, ChannelType::Texture2D };
+            if (!d3dMultiPass->SetImagePass(ph.hlslSource, inputs, chTypes,
+                                             true, shaderDir, assetsDir)) return false;
+        }
+
+        // 设置外部纹理 SRV
+        if (d3dTextures) {
+            for (int i = 0; i < 4; ++i) {
+                if (d3dTextures->HasTexture(i)) {
+                    float tw, th;
+                    d3dTextures->GetResolution(i, tw, th);
+                    d3dMultiPass->SetExternalTexture(i, d3dTextures->GetSRV(i),
+                                                      static_cast<int>(tw), static_cast<int>(th),
+                                                      d3dTextures->GetChannelType(i));
+                }
+            }
+        }
+
+        // .stoy 纹理绑定（register 槽位映射）
+        std::vector<D3D11MultiPass::StoyTextureSRV> stoyTexSrvs;
+        for (const auto& binding : stoyHlsl.textureBindings) {
+            if (!binding.isPassOutput) {
+                D3D11MultiPass::StoyTextureSRV texSrv;
+                texSrv.registerSlot = binding.registerSlot;
+                for (int ti = 0; ti < (int)stoyData.textures.size(); ti++) {
+                    if (stoyData.textures[ti].name == binding.name) {
+                        if (d3dTextures && d3dTextures->HasTexture(ti)) {
+                            texSrv.srv = d3dTextures->GetSRV(ti);
+                            float tw, th;
+                            d3dTextures->GetResolution(ti, tw, th);
+                            texSrv.width = static_cast<int>(tw);
+                            texSrv.height = static_cast<int>(th);
+                        }
+                        break;
+                    }
+                }
+                stoyTexSrvs.push_back(texSrv);
+            }
+        }
+        d3dMultiPass->SetStoyExternalTextures(stoyTexSrvs);
+
+        // pass 输出纹理 register 映射
+        std::vector<int> passOutputSlots;
+        int imagePassSlot = -1;
+        for (const auto& binding : stoyHlsl.textureBindings) {
+            if (binding.isPassOutput) {
+                if (binding.passIndex < numPasses - 1) {
+                    while ((int)passOutputSlots.size() <= binding.passIndex) {
+                        passOutputSlots.push_back(-1);
+                    }
+                    passOutputSlots[binding.passIndex] = binding.registerSlot;
+                } else {
+                    imagePassSlot = binding.registerSlot;
+                }
+            }
+        }
+        d3dMultiPass->SetStoyPassOutputSlots(passOutputSlots, imagePassSlot);
+
+        return true;
+    };
+
+    // ---- .stoy 独立分支：纹理加载 ----
+    auto LoadD3D11StoyTextures = [&]() {
+        if (!d3dTextures) return;
+        d3dTextures->Clear();
+
+        if ((int)stoyData.textures.size() > 4) {
+            std::cerr << "Warning: .stoy declares " << stoyData.textures.size()
+                      << " textures, but only first 4 are supported in this version" << std::endl;
+        }
+        for (int i = 0; i < (int)stoyData.textures.size() && i < 4; i++) {
+            const auto& tex = stoyData.textures[i];
+            std::string texPath = stoyData.stoyDir.empty()
+                ? tex.path
+                : stoyData.stoyDir + "/" + tex.path;
+            d3dTextures->LoadTexture(i, texPath);
+        }
+    };
+
+    // D3D11 纹理加载辅助函数（ShaderToy 模式，初始加载和热加载复用）
     auto LoadD3D11TexturesForProject = [&](const ShaderProjectData& data) {
         if (!d3dTextures) return;
         d3dTextures->Clear();
@@ -1078,35 +1259,49 @@ int main(int argc, char* argv[]) {
     };
 
     if (useD3D11) {
-        LoadD3D11TexturesForProject(projData);
-
-        // HLSL 原生模式不需要翻译 dump
-        if (!projData.isHlsl) {
-            // HLSL 翻译输出：先 dump 再 setup，确保编译失败也能输出 HLSL 方便调试
-            {
-            namespace fs = std::filesystem;
-            std::string sName = GetShaderDumpName(config.shaderPath);
-            std::string subDir = config.wallpaperMode ? "wallpaper-mode" : "window-mode";
-            fs::path outDir = GetLogDir() / subDir / sName;
-            std::cout << "HLSL dump (" << subDir << "): " << config.shaderPath << std::endl;
-            int errors = TranslateAndDumpHlsl(project.GetData(), sName, outDir, config.shaderPath);
-            if (errors > 0) {
-                std::cerr << "WARNING: " << errors << " pass(es) had HLSL compile errors." << std::endl;
+        if (config.isStoyMode) {
+            // ---- .stoy 独立分支 ----
+            LoadD3D11StoyTextures();
+            if (!SetupD3D11Stoy()) {
+                std::cerr << "Failed to setup D3D11 for .stoy: "
+                          << (d3dMultiPass ? d3dMultiPass->GetLastError() : "null") << std::endl;
+                SDL_Quit();
+                return 1;
             }
-        }
-        } // end if (!projData.isHlsl)
+        } else {
+            // ---- ShaderToy 模式 ----
+            LoadD3D11TexturesForProject(projData);
 
-        if (!SetupD3D11MultiPass(projData)) {
-            std::cerr << "Failed to setup D3D11 multi-pass: "
-                      << (d3dMultiPass ? d3dMultiPass->GetLastError() : "null") << std::endl;
-            SDL_Quit();
-            return 1;
+            // HLSL 原生模式不需要翻译 dump
+            if (!projData.isHlsl) {
+                // HLSL 翻译输出：先 dump 再 setup，确保编译失败也能输出 HLSL 方便调试
+                {
+                namespace fs = std::filesystem;
+                std::string sName = GetShaderDumpName(config.shaderPath);
+                std::string subDir = config.wallpaperMode ? "wallpaper-mode" : "window-mode";
+                fs::path outDir = GetLogDir() / subDir / sName;
+                std::cout << "HLSL dump (" << subDir << "): " << config.shaderPath << std::endl;
+                int errors = TranslateAndDumpHlsl(project.GetData(), sName, outDir, config.shaderPath);
+                if (errors > 0) {
+                    std::cerr << "WARNING: " << errors << " pass(es) had HLSL compile errors." << std::endl;
+                }
+            }
+            } // end if (!projData.isHlsl)
+
+            if (!SetupD3D11MultiPass(projData)) {
+                std::cerr << "Failed to setup D3D11 multi-pass: "
+                          << (d3dMultiPass ? d3dMultiPass->GetLastError() : "null") << std::endl;
+                SDL_Quit();
+                return 1;
+            }
         }
     }
 #endif
 
     std::cout << "Shader loaded: " << config.shaderPath
-              << (projData.isMultiPass ? " (multi-pass)" : " (single-pass)") << std::endl;
+              << (config.isStoyMode ? " (.stoy mode)"
+                  : (projData.isMultiPass ? " (multi-pass)" : " (single-pass)"))
+              << std::endl;
 
     // 窗口标题更新（显示渲染后端、shader 名称、窗口尺寸）
     auto updateWindowTitle = [&]() {
@@ -1124,7 +1319,7 @@ int main(int argc, char* argv[]) {
     // HLSL 翻译输出 lambda（热加载时复用）
     auto dumpHlsl = [&]() {
 #ifdef _WIN32
-        if (!useD3D11) return;
+        if (!useD3D11 || config.isStoyMode) return;  // .stoy 不需要 HLSL dump
         namespace fs = std::filesystem;
         std::string shaderName = GetShaderDumpName(config.shaderPath);
         std::string subDir = config.wallpaperMode ? "wallpaper-mode" : "window-mode";
@@ -1143,16 +1338,28 @@ int main(int argc, char* argv[]) {
     std::atomic<bool> shaderNeedsReload{false};
     FileWatcher watcher;
     if (config.hotReload) {
-        auto files = project.GetAllFiles();
-        if (!files.empty()) {
-            watcher.Watch(files[0], [&](const std::string&) {
+        // .stoy 模式：监控 .stoy 文件和纹理文件
+        if (config.isStoyMode) {
+            watcher.Watch(config.shaderPath, [&](const std::string&) {
                 shaderNeedsReload.store(true);
             });
-            for (size_t i = 1; i < files.size(); ++i) {
-                watcher.AddFile(files[i]);
+            for (const auto& tex : stoyData.textures) {
+                std::string texPath = stoyData.stoyDir.empty()
+                    ? tex.path : stoyData.stoyDir + "/" + tex.path;
+                watcher.AddFile(texPath);
+            }
+        } else {
+            auto files = project.GetAllFiles();
+            if (!files.empty()) {
+                watcher.Watch(files[0], [&](const std::string&) {
+                    shaderNeedsReload.store(true);
+                });
+                for (size_t i = 1; i < files.size(); ++i) {
+                    watcher.AddFile(files[i]);
+                }
             }
         }
-        std::cout << "Hot reload enabled (" << files.size() << " file(s) monitored)." << std::endl;
+        std::cout << "Hot reload enabled." << std::endl;
     }
 
     // ============================================================
@@ -1162,11 +1369,12 @@ int main(int argc, char* argv[]) {
     DebugUIState debugState;
     std::string lastShaderError;
 
-    // 扫描 assets/shaders/ 目录获取所有 shader 文件，按类型分三组
+    // 扫描 assets/shaders/ 和 assets/stoys/ 目录获取所有 shader 文件，按类型分组
     auto ScanShaderFiles = [&]() {
         debugState.glslFiles.clear();
         debugState.jsonFiles.clear();
         debugState.dirFiles.clear();
+        debugState.stoyFiles.clear();
         const std::string shaderDir = "assets/shaders";
         std::error_code ec;
         if (std::filesystem::exists(shaderDir, ec)) {
@@ -1191,22 +1399,57 @@ int main(int argc, char* argv[]) {
             std::sort(debugState.jsonFiles.begin(), debugState.jsonFiles.end());
             std::sort(debugState.dirFiles.begin(), debugState.dirFiles.end());
         }
+
+        // 扫描 assets/stoys/ 目录（独立列表）
+        const std::string stoyDir = "assets/stoys";
+        if (std::filesystem::exists(stoyDir, ec)) {
+            for (const auto& entry : std::filesystem::directory_iterator(stoyDir, ec)) {
+                if (entry.is_regular_file() && entry.path().extension() == ".stoy") {
+                    debugState.stoyFiles.push_back(entry.path().generic_string());
+                }
+            }
+            std::sort(debugState.stoyFiles.begin(), debugState.stoyFiles.end());
+        }
     };
 
     // FileWatcher 重建辅助函数（shader 切换时复用）
     auto RebuildFileWatcher = [&]() {
         if (!config.hotReload) return;
         watcher.Stop();
-        ShaderProject newProject;
-        if (newProject.Load(config.shaderPath)) {
-            project = std::move(newProject);
-            auto files = project.GetAllFiles();
-            if (!files.empty()) {
-                watcher.Watch(files[0], [&](const std::string&) {
+
+        if (config.isStoyMode) {
+            // .stoy 模式：重新解析并监控文件
+            StoyParser parser;
+            if (parser.ParseFile(config.shaderPath)) {
+                stoyData = parser.GetData();
+                stoyHlsl = StoyHlslGenerator::Generate(stoyData);
+                watcher.Watch(config.shaderPath, [&](const std::string&) {
                     shaderNeedsReload.store(true);
                 });
-                for (size_t fi = 1; fi < files.size(); ++fi) {
-                    watcher.AddFile(files[fi]);
+                for (const auto& tex : stoyData.textures) {
+                    std::string texPath = stoyData.stoyDir.empty()
+                        ? tex.path : stoyData.stoyDir + "/" + tex.path;
+                    watcher.AddFile(texPath);
+                }
+            } else {
+                // 解析失败仍监控 .stoy 文件，便于修复后自动重载
+                std::cerr << "RebuildFileWatcher: .stoy parse failed: " << parser.GetError() << std::endl;
+                watcher.Watch(config.shaderPath, [&](const std::string&) {
+                    shaderNeedsReload.store(true);
+                });
+            }
+        } else {
+            ShaderProject newProject;
+            if (newProject.Load(config.shaderPath)) {
+                project = std::move(newProject);
+                auto files = project.GetAllFiles();
+                if (!files.empty()) {
+                    watcher.Watch(files[0], [&](const std::string&) {
+                        shaderNeedsReload.store(true);
+                    });
+                    for (size_t fi = 1; fi < files.size(); ++fi) {
+                        watcher.AddFile(files[fi]);
+                    }
                 }
             }
         }
@@ -1245,7 +1488,8 @@ int main(int argc, char* argv[]) {
         // 扫描 shader 文件列表并传给 tray（复用 ScanShaderFiles 扫描到 debugState，再传给 tray）
         ScanShaderFiles();
         tray.SetShaderList(debugState.glslFiles, debugState.jsonFiles,
-                           debugState.dirFiles, config.shaderPath);
+                           debugState.dirFiles, debugState.stoyFiles,
+                           config.shaderPath, config.isStoyMode);
     }
 
     // ============================================================
@@ -1444,6 +1688,7 @@ int main(int argc, char* argv[]) {
         debugState.shaderPath  = config.shaderPath;
         debugState.shaderError = lastShaderError;
         debugState.paused      = paused.load();
+        debugState.isStoyMode  = config.isStoyMode;
 #ifdef _WIN32
         if (useD3D11 && d3dMultiPass) {
             debugState.isMultiPass = d3dMultiPass->IsMultiPass();
@@ -1594,8 +1839,20 @@ int main(int argc, char* argv[]) {
             if (!debugState.requestSwitchShader.empty()) {
                 config.shaderPath = debugState.requestSwitchShader;
                 debugState.requestSwitchShader.clear();
-                shaderNeedsReload = true;
-                RebuildFileWatcher();
+                // 检测是否切换到 .stoy 模式
+                {
+                    namespace fs = std::filesystem;
+                    std::string ext = fs::path(config.shaderPath).extension().string();
+                    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
+                    if (ext == ".stoy" && !useD3D11) {
+                        lastShaderError = ".stoy requires D3D11 mode. Start with --d3d11 to use .stoy files.";
+                        std::cerr << lastShaderError << std::endl;
+                    } else {
+                        config.isStoyMode = (ext == ".stoy");
+                        shaderNeedsReload = true;
+                        RebuildFileWatcher();
+                    }
+                }
             }
             // 重载请求
             if (debugState.requestReload) {
@@ -1693,6 +1950,13 @@ int main(int argc, char* argv[]) {
         if (config.wallpaperMode && !trayShaderSwitchRequest.empty()) {
             config.shaderPath = trayShaderSwitchRequest;
             trayShaderSwitchRequest.clear();
+            // 检测是否切换到 .stoy 模式（壁纸模式总是 D3D11，所以不需要校验）
+            {
+                namespace fs = std::filesystem;
+                std::string ext = fs::path(config.shaderPath).extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
+                config.isStoyMode = (ext == ".stoy");
+            }
             shaderNeedsReload = true;
             RebuildFileWatcher();
         }
@@ -1724,49 +1988,80 @@ int main(int argc, char* argv[]) {
 
         // 热加载：重新加载整个 shader 项目并重建渲染器
         if (shaderNeedsReload.exchange(false)) {
-            ShaderProject newProject;
-            if (newProject.Load(config.shaderPath)) {
-                project = std::move(newProject);
+            if (config.isStoyMode) {
+                // ---- .stoy 独立分支热加载 ----
+                StoyParser parser;
+                if (parser.ParseFile(config.shaderPath)) {
+                    stoyData = parser.GetData();
+                    stoyHlsl = StoyHlslGenerator::Generate(stoyData);
 #ifdef _WIN32
-                if (useD3D11) {
-                    // D3D11 路径热加载
-                    LoadD3D11TexturesForProject(project.GetData());
-                    if (SetupD3D11MultiPass(project.GetData())) {
+                    LoadD3D11StoyTextures();
+                    if (SetupD3D11Stoy()) {
                         lastShaderError.clear();
-                        std::cout << "D3D11 Shader reloaded successfully." << std::endl;
-                        dumpHlsl();
+                        std::cout << ".stoy reloaded successfully." << std::endl;
                         updateWindowTitle();
                         if (config.wallpaperMode) {
                             tray.SetShaderList(debugState.glslFiles, debugState.jsonFiles,
-                                               debugState.dirFiles, config.shaderPath);
+                                               debugState.dirFiles, debugState.stoyFiles,
+                                               config.shaderPath, config.isStoyMode);
                         }
                     } else {
-                        lastShaderError = d3dMultiPass ? d3dMultiPass->GetLastError() : "D3D11 setup failed";
-                        std::cerr << "D3D11 Shader reload failed: " << lastShaderError << std::endl;
-                        dumpHlsl(); // 编译失败也输出 HLSL，方便调试
+                        lastShaderError = d3dMultiPass ? d3dMultiPass->GetLastError() : "D3D11 stoy setup failed";
+                        std::cerr << ".stoy reload failed: " << lastShaderError << std::endl;
                     }
-                } else
 #endif
-                {
-                    // OpenGL 路径热加载
-                    LoadTexturesForProject(project.GetData());
-                    if (SetupMultiPass(project.GetData())) {
-                        lastShaderError.clear();
-                        std::cout << "Shader reloaded successfully." << std::endl;
-                        dumpHlsl();
-                        updateWindowTitle();
-                        if (config.wallpaperMode) {
-                            tray.SetShaderList(debugState.glslFiles, debugState.jsonFiles,
-                                               debugState.dirFiles, config.shaderPath);
-                        }
-                    } else {
-                        lastShaderError = multiPass.GetLastError();
-                        std::cerr << "Shader reload failed: " << lastShaderError << std::endl;
-                    }
+                } else {
+                    lastShaderError = parser.GetError();
+                    std::cerr << ".stoy reload failed: " << lastShaderError << std::endl;
                 }
             } else {
-                lastShaderError = newProject.GetLastError();
-                std::cerr << "Shader reload failed: " << lastShaderError << std::endl;
+                // ---- ShaderToy 模式热加载 ----
+                ShaderProject newProject;
+                if (newProject.Load(config.shaderPath)) {
+                    project = std::move(newProject);
+#ifdef _WIN32
+                    if (useD3D11) {
+                        // D3D11 路径热加载
+                        LoadD3D11TexturesForProject(project.GetData());
+                        if (SetupD3D11MultiPass(project.GetData())) {
+                            lastShaderError.clear();
+                            std::cout << "D3D11 Shader reloaded successfully." << std::endl;
+                            dumpHlsl();
+                            updateWindowTitle();
+                            if (config.wallpaperMode) {
+                                tray.SetShaderList(debugState.glslFiles, debugState.jsonFiles,
+                                                   debugState.dirFiles, debugState.stoyFiles,
+                                                   config.shaderPath, config.isStoyMode);
+                            }
+                        } else {
+                            lastShaderError = d3dMultiPass ? d3dMultiPass->GetLastError() : "D3D11 setup failed";
+                            std::cerr << "D3D11 Shader reload failed: " << lastShaderError << std::endl;
+                            dumpHlsl(); // 编译失败也输出 HLSL，方便调试
+                        }
+                    } else
+#endif
+                    {
+                        // OpenGL 路径热加载
+                        LoadTexturesForProject(project.GetData());
+                        if (SetupMultiPass(project.GetData())) {
+                            lastShaderError.clear();
+                            std::cout << "Shader reloaded successfully." << std::endl;
+                            dumpHlsl();
+                            updateWindowTitle();
+                            if (config.wallpaperMode) {
+                                tray.SetShaderList(debugState.glslFiles, debugState.jsonFiles,
+                                                   debugState.dirFiles, debugState.stoyFiles,
+                                                   config.shaderPath, config.isStoyMode);
+                            }
+                        } else {
+                            lastShaderError = multiPass.GetLastError();
+                            std::cerr << "Shader reload failed: " << lastShaderError << std::endl;
+                        }
+                    }
+                } else {
+                    lastShaderError = newProject.GetLastError();
+                    std::cerr << "Shader reload failed: " << lastShaderError << std::endl;
+                }
             }
         }
 

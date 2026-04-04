@@ -72,9 +72,10 @@ std::string OpenShaderFileDialog() {
                           IID_IFileOpenDialog, reinterpret_cast<void**>(&pDialog));
     if (SUCCEEDED(hr)) {
         COMDLG_FILTERSPEC filters[] = {
-            { L"Shader Files (*.glsl, *.json)", L"*.glsl;*.json" },
+            { L"Shader Files (*.glsl, *.json, *.stoy)", L"*.glsl;*.json;*.stoy" },
             { L"GLSL Files (*.glsl)",           L"*.glsl" },
             { L"JSON Files (*.json)",           L"*.json" },
+            { L"Stoy Files (*.stoy)",           L"*.stoy" },
             { L"All Files (*.*)",               L"*.*" },
         };
         pDialog->SetFileTypes(ARRAYSIZE(filters), filters);
@@ -208,9 +209,10 @@ std::string BrowseAndValidateShader() {
                           IID_IFileOpenDialog, reinterpret_cast<void**>(&pDialog));
     if (SUCCEEDED(hr)) {
         COMDLG_FILTERSPEC filters[] = {
-            { L"Shader Files (*.glsl, *.json)", L"*.glsl;*.json" },
+            { L"Shader Files (*.glsl, *.json, *.stoy)", L"*.glsl;*.json;*.stoy" },
             { L"GLSL Files (*.glsl)",           L"*.glsl" },
             { L"JSON Files (*.json)",           L"*.json" },
+            { L"Stoy Files (*.stoy)",           L"*.stoy" },
             { L"All Files (*.*)",               L"*.*" },
         };
         pDialog->SetFileTypes(ARRAYSIZE(filters), filters);
@@ -262,6 +264,7 @@ std::string BrowseAndValidateShader() {
         wMsg += L"\n\nPlease select:\n";
         wMsg += L"  - A single .glsl file (ShaderToy fragment shader)\n";
         wMsg += L"  - A .json file (ShaderToy API export)\n";
+        wMsg += L"  - A .stoy file (custom shader description format)\n";
         wMsg += L"  - A directory containing image.glsl (multi-file shader project)";
 
         MessageBoxW(nullptr, wMsg.c_str(), L"Invalid Shader", MB_OK | MB_ICONWARNING);

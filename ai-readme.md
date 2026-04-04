@@ -10,6 +10,8 @@
 ## 目录说明
 - `src/` — 源代码
 - `assets/` — 资源文件（着色器等）
+  - `assets/shaders/` — ShaderToy 格式 shader（.glsl/.json/.hlsl 和目录模式）
+  - `assets/stoys/` — .stoy 自定义格式 shader（独立模式，不与 ShaderToy 格式混合）
 - `third_party/` — 第三方依赖（git submodule：SDL2、GLAD、ImGui、nlohmann/json）
 - `Docs/` — 项目知识库（技术文档，供 AI 读写，也供用户查阅）
   - `Docs/疑难问题记录/` — 疑难问题排查记录（OpenGL/D3D11/Windows 平台相关的问题根因分析与解决方案）
@@ -117,8 +119,9 @@
 **目标**：设计并实现 `.stoy` 自定义 shader 描述格式，替代 shadertoy.com JSON 格式，支持具名纹理、多 Pass、内置变量声明等
 - [x] .stoy 文件格式设计（Docs/stoy文件格式设计.md）
 - [x] BNF 语法规范（Docs/stoy_grammar.bnf，用于 VSCode 语法高亮插件）
-- [ ] .stoy 解析器（parser）实现
-- [ ] .stoy 示例文件
-- [ ] HLSL 代码注入（inner_vars / texture / pass 自动注入）
-- [ ] 渲染管线集成（ShaderProject 支持 .stoy 格式加载）
+- [x] .stoy 解析器（parser）实现（stoy_parser.h/cpp，手写递归下降，完整错误报告）
+- [x] HLSL 代码注入（stoy_hlsl_generator.h/cpp，cbuffer/别名/纹理声明/mainImage 包装）
+- [x] 渲染管线集成（D3D11MultiPass .stoy 纹理绑定，独立于 ShaderToy 模式）
+- [x] .stoy 独立模式分支（不经过 ShaderProject，走 StoyParser → StoyHlslGenerator → D3D11MultiPass 独立路径）
+- [x] .stoy 示例文件（assets/stoys/minimal.stoy + assets/stoys/feedback_demo.stoy）
 - [ ] VSCode 语法高亮插件

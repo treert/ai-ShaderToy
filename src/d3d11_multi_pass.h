@@ -124,6 +124,33 @@ public:
     /// 获取默认采样器
     ID3D11SamplerState* GetDefaultSampler() const { return defaultSampler_.Get(); }
 
+    // ---- .stoy 专用接口 ----
+
+    /// 设置 .stoy 纹理绑定信息（register 槽位 → SRV 映射）
+    struct StoyTextureSRV {
+        int registerSlot = -1;
+        ID3D11ShaderResourceView* srv = nullptr;
+        ID3D11SamplerState* sampler = nullptr;  // nullptr 使用默认采样器
+        int width = 0;
+        int height = 0;
+    };
+
+    /// 设置 .stoy 模式的外部纹理绑定
+    void SetStoyExternalTextures(const std::vector<StoyTextureSRV>& textures);
+
+    /// 启用/禁用 .stoy 模式
+    void SetStoyMode(bool enabled) { isStoyMode_ = enabled; }
+    bool IsStoyMode() const { return isStoyMode_; }
+
+    /// 获取 buffer pass 的输出 SRV（供 .stoy 纹理绑定使用）
+    ID3D11ShaderResourceView* GetBufferOutputSRVPrev(int index) const;
+    ID3D11ShaderResourceView* GetBufferOutputSRV(int index) const;
+
+    /// 设置 .stoy 的 pass 输出纹理 register 映射
+    /// passOutputSlots[i] = buffer pass i 的输出纹理 register 槽位
+    /// imagePassSlot = image pass 的输出纹理 register 槽位
+    void SetStoyPassOutputSlots(const std::vector<int>& passOutputSlots, int imagePassSlot);
+
 private:
     bool CreateFBO(D3D11RenderPass& pass, int width, int height);
     bool CreateCubeMapFBO(D3D11RenderPass& pass, int cubeSize);
@@ -136,6 +163,7 @@ private:
     void RenderCubeMapPass(D3D11RenderPass& pass, float time, float timeDelta,
                            int frame, const float mouse[4], const float date[4], float clickTime);
     void BindInputTextures(const D3D11RenderPass& pass, float channelRes[4][4]);
+    void BindStoyTextures(const D3D11RenderPass& pass, int passIndex);
     void SwapBuffers();
     void DrawFullscreenTriangle();
 
@@ -158,6 +186,12 @@ private:
 
     std::array<D3D11ExternalTextureInfo, 4> externalTextures_;
     ComPtr<ID3D11SamplerState> defaultSampler_;
+
+    // .stoy 模式
+    bool isStoyMode_ = false;
+    std::vector<StoyTextureSRV> stoyExternalTextures_;
+    std::vector<int> stoyPassOutputSlots_;      // buffer pass i → register 槽位
+    int stoyImagePassSlot_ = -1;                // image pass → register 槽位
 };
 
 #endif // _WIN32

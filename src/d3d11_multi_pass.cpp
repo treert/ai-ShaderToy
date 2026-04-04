@@ -319,6 +319,69 @@ void D3D11MultiPass::BindInputTextures(const D3D11RenderPass& pass, float channe
     }
 }
 
+// ============================================================
+// .stoy 纹理绑定
+// ============================================================
+
+void D3D11MultiPass::SetStoyExternalTextures(const std::vector<StoyTextureSRV>& textures) {
+    stoyExternalTextures_ = textures;
+}
+
+void D3D11MultiPass::SetStoyPassOutputSlots(const std::vector<int>& passOutputSlots, int imagePassSlot) {
+    stoyPassOutputSlots_ = passOutputSlots;
+    stoyImagePassSlot_ = imagePassSlot;
+}
+
+ID3D11ShaderResourceView* D3D11MultiPass::GetBufferOutputSRVPrev(int index) const {
+    if (index < 0 || index >= static_cast<int>(bufferPasses_.size())) return nullptr;
+    return bufferPasses_[index].outputSRVPrev.Get();
+}
+
+ID3D11ShaderResourceView* D3D11MultiPass::GetBufferOutputSRV(int index) const {
+    if (index < 0 || index >= static_cast<int>(bufferPasses_.size())) return nullptr;
+    return bufferPasses_[index].outputSRV.Get();
+}
+
+void D3D11MultiPass::BindStoyTextures(const D3D11RenderPass& pass, int passIndex) {
+    ID3D11SamplerState* defSampler = defaultSampler_.Get();
+
+    // 绑定外部纹理（按 register 槽位）
+    for (const auto& tex : stoyExternalTextures_) {
+        if (tex.registerSlot >= 0) {
+            ID3D11ShaderResourceView* srv = tex.srv;
+            ID3D11SamplerState* sampler = tex.sampler ? tex.sampler : defSampler;
+            context_->PSSetShaderResources(static_cast<UINT>(tex.registerSlot), 1, &srv);
+            context_->PSSetSamplers(static_cast<UINT>(tex.registerSlot), 1, &sampler);
+        }
+    }
+
+    // 绑定 pass 输出纹理
+    // 引用语义：已执行的 pass → 当前帧(outputSRV)，未执行 / 自引用 → 上一帧(outputSRVPrev)
+    int numBufferPasses = static_cast<int>(bufferPasses_.size());
+    for (int i = 0; i < numBufferPasses; i++) {
+        if (i < static_cast<int>(stoyPassOutputSlots_.size())) {
+            int slot = stoyPassOutputSlots_[i];
+            ID3D11ShaderResourceView* srv = nullptr;
+            if (i < passIndex) {
+                // 已执行的 buffer pass → 当前帧
+                srv = bufferPasses_[i].outputSRV.Get();
+            } else {
+                // 未执行或自引用 → 上一帧
+                srv = bufferPasses_[i].outputSRVPrev.Get();
+            }
+            context_->PSSetShaderResources(static_cast<UINT>(slot), 1, &srv);
+            context_->PSSetSamplers(static_cast<UINT>(slot), 1, &defSampler);
+        }
+    }
+
+    // Image pass 的输出纹理（如果被引用，总是上一帧）
+    if (stoyImagePassSlot_ >= 0 && imagePass_.outputSRVPrev) {
+        ID3D11ShaderResourceView* srv = imagePass_.outputSRVPrev.Get();
+        context_->PSSetShaderResources(static_cast<UINT>(stoyImagePassSlot_), 1, &srv);
+        context_->PSSetSamplers(static_cast<UINT>(stoyImagePassSlot_), 1, &defSampler);
+    }
+}
+
 void D3D11MultiPass::DrawFullscreenTriangle() {
     context_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     context_->IASetInputLayout(nullptr);
@@ -367,7 +430,17 @@ void D3D11MultiPass::RenderSinglePass(D3D11RenderPass& pass, float time, float t
 
     // 绑定输入纹理并获取 channelResolution
     float channelRes[4][4] = {};
-    BindInputTextures(pass, channelRes);
+    if (isStoyMode_) {
+        // .stoy 模式：按 register 槽位绑定所有纹理
+        // 确定当前 pass 的 index
+        int passIdx = -1;  // -1 = image pass
+        for (int i = 0; i < static_cast<int>(bufferPasses_.size()); i++) {
+            if (&bufferPasses_[i] == &pass) { passIdx = i; break; }
+        }
+        BindStoyTextures(pass, passIdx);
+    } else {
+        BindInputTextures(pass, channelRes);
+    }
     memcpy(cb.iChannelResolution, channelRes, sizeof(channelRes));
 
     pass.shader.UpdateConstants(cb);
@@ -376,8 +449,22 @@ void D3D11MultiPass::RenderSinglePass(D3D11RenderPass& pass, float time, float t
     DrawFullscreenTriangle();
 
     // 解绑 SRV（防止 SRV/RTV 冲突）
-    ID3D11ShaderResourceView* nullSRVs[4] = {};
-    context_->PSSetShaderResources(0, 4, nullSRVs);
+    if (isStoyMode_) {
+        // .stoy 模式下纹理可能绑定在高于 4 的槽位
+        int maxSlot = 4;
+        for (const auto& tex : stoyExternalTextures_) {
+            if (tex.registerSlot >= maxSlot) maxSlot = tex.registerSlot + 1;
+        }
+        for (int s : stoyPassOutputSlots_) {
+            if (s >= maxSlot) maxSlot = s + 1;
+        }
+        if (stoyImagePassSlot_ >= maxSlot) maxSlot = stoyImagePassSlot_ + 1;
+        std::vector<ID3D11ShaderResourceView*> nullSRVs(maxSlot, nullptr);
+        context_->PSSetShaderResources(0, static_cast<UINT>(maxSlot), nullSRVs.data());
+    } else {
+        ID3D11ShaderResourceView* nullSRVs[4] = {};
+        context_->PSSetShaderResources(0, 4, nullSRVs);
+    }
 }
 
 void D3D11MultiPass::RenderCubeMapPass(D3D11RenderPass& pass, float time, float timeDelta,

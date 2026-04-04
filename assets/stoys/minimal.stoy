@@ -1,0 +1,17 @@
+-- minimal.stoy — 最小 .stoy 示例：单 pass 渐变色
+-- 演示 .stoy 文件的最基本用法
+
+inner_vars {
+    iTime
+    iResolution
+}
+
+pass Main {
+    code [=[
+        void mainImage(inout float4 fragColor, float2 fragCoord) {
+            float2 uv = fragCoord / iResolution.xy;
+            float3 col = 0.5 + 0.5 * cos(iTime + float3(uv.x, uv.y, uv.x + uv.y) + float3(0, 2, 4));
+            fragColor = float4(col, 1.0);
+        }
+    ]=]
+}

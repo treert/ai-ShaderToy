@@ -41,6 +41,8 @@ struct DebugUIState {
     std::vector<std::string> glslFiles;     // 单文件 .glsl shader
     std::vector<std::string> jsonFiles;     // ShaderToy JSON 导入
     std::vector<std::string> dirFiles;      // 目录模式（含 image.glsl 的子目录）
+    std::vector<std::string> stoyFiles;     // .stoy 自定义格式 shader
+    bool isStoyMode = false;                // 当前是否为 .stoy 模式（影响 shader 列表显示）
 };
 
 /// DebugUI 封装 Dear ImGui 调试面板的全部逻辑。

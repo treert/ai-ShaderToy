@@ -1,0 +1,64 @@
+-- feedback_demo.stoy — 多 pass 反馈效果示例
+-- 演示 .stoy 格式的多 pass 渲染、内置变量、pass 间引用
+
+inner_vars {
+    iTime
+    iResolution
+    iMouse
+    iFrame
+}
+
+common [=[
+    float hash(float p) {
+        return frac(sin(p) * 43758.5453);
+    }
+
+    float noise2d(float2 p) {
+        float2 i = floor(p);
+        float2 f = frac(p);
+        f = f * f * (3.0 - 2.0 * f);
+        float a = hash(i.x + i.y * 157.0);
+        float b = hash(i.x + 1.0 + i.y * 157.0);
+        float c = hash(i.x + (i.y + 1.0) * 157.0);
+        float d = hash(i.x + 1.0 + (i.y + 1.0) * 157.0);
+        return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);
+    }
+]=]
+
+-- Feedback pass: 自引用，读取上一帧输出
+pass Feedback {
+    init = float4(0, 0, 0, 1)
+
+    code [=[
+        void mainImage(inout float4 fragColor, float2 fragCoord) {
+            float2 uv = fragCoord / iResolution.xy;
+
+            // 读取上一帧（自引用 → 上一帧数据）
+            float4 prev = Feedback.Sample(Feedback_Sampler, uv);
+
+            // 生成噪声
+            float n = noise2d(uv * 8.0 + iTime * 0.5);
+
+            // 衰减 + 累积
+            fragColor = prev * 0.97 + float4(n * 0.03, n * 0.02, n * 0.01, 0);
+            fragColor.a = 1.0;
+        }
+    ]=]
+}
+
+-- Final pass: 读取 Feedback（已执行 → 当前帧），输出到屏幕
+pass Final {
+    code [=[
+        void mainImage(inout float4 fragColor, float2 fragCoord) {
+            float2 uv = fragCoord / iResolution.xy;
+            float4 fb = Feedback.Sample(Feedback_Sampler, uv);
+
+            // 色彩映射
+            float3 col = fb.rgb;
+            col = pow(col, float3(0.8, 0.9, 1.1));
+            col *= 1.2;
+
+            fragColor = float4(col, 1.0);
+        }
+    ]=]
+}

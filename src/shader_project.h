@@ -41,6 +41,7 @@ struct ShaderProjectData {
 
 /// ShaderProject 加载器
 /// 统一管理三种 shader 加载模式（单文件 / JSON / 目录）
+/// 注意：.stoy 格式走独立分支，不经过 ShaderProject
 class ShaderProject {
 public:
     /// 加载 shader 项目

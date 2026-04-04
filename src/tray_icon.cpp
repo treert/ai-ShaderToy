@@ -182,20 +182,24 @@ void TrayIcon::RebuildMenu() {
             }
         };
 
-        if (!glslFiles_.empty()) {
-            addItems(glslFiles_);
-        }
-        if (!jsonFiles_.empty()) {
-            if (menuId > ID_TRAY_SHADER_BASE) {
-                AppendMenuW(shaderSubMenu_, MF_SEPARATOR, 0, nullptr);
+        if (isStoyMode_) {
+            addItems(stoyFiles_);
+        } else {
+            if (!glslFiles_.empty()) {
+                addItems(glslFiles_);
             }
-            addItems(jsonFiles_);
-        }
-        if (!dirFiles_.empty()) {
-            if (menuId > ID_TRAY_SHADER_BASE) {
-                AppendMenuW(shaderSubMenu_, MF_SEPARATOR, 0, nullptr);
+            if (!jsonFiles_.empty()) {
+                if (menuId > ID_TRAY_SHADER_BASE) {
+                    AppendMenuW(shaderSubMenu_, MF_SEPARATOR, 0, nullptr);
+                }
+                addItems(jsonFiles_);
             }
-            addItems(dirFiles_);
+            if (!dirFiles_.empty()) {
+                if (menuId > ID_TRAY_SHADER_BASE) {
+                    AppendMenuW(shaderSubMenu_, MF_SEPARATOR, 0, nullptr);
+                }
+                addItems(dirFiles_);
+            }
         }
 
         AppendMenuW(menu_, MF_SEPARATOR, 0, nullptr);
@@ -233,17 +237,25 @@ void TrayIcon::UpdateTooltip(float fps, float renderTimeMs,
 void TrayIcon::SetShaderList(const std::vector<std::string>& glslFiles,
                               const std::vector<std::string>& jsonFiles,
                               const std::vector<std::string>& dirFiles,
-                              const std::string& currentShader) {
+                              const std::vector<std::string>& stoyFiles,
+                              const std::string& currentShader,
+                              bool isStoyMode) {
     glslFiles_ = glslFiles;
     jsonFiles_ = jsonFiles;
     dirFiles_ = dirFiles;
+    stoyFiles_ = stoyFiles;
     currentShader_ = currentShader;
+    isStoyMode_ = isStoyMode;
 
     // 重建 shaderPaths_ 映射表（顺序需与菜单构建一致）
     shaderPaths_.clear();
-    shaderPaths_.insert(shaderPaths_.end(), glslFiles_.begin(), glslFiles_.end());
-    shaderPaths_.insert(shaderPaths_.end(), jsonFiles_.begin(), jsonFiles_.end());
-    shaderPaths_.insert(shaderPaths_.end(), dirFiles_.begin(), dirFiles_.end());
+    if (isStoyMode_) {
+        shaderPaths_.insert(shaderPaths_.end(), stoyFiles_.begin(), stoyFiles_.end());
+    } else {
+        shaderPaths_.insert(shaderPaths_.end(), glslFiles_.begin(), glslFiles_.end());
+        shaderPaths_.insert(shaderPaths_.end(), jsonFiles_.begin(), jsonFiles_.end());
+        shaderPaths_.insert(shaderPaths_.end(), dirFiles_.begin(), dirFiles_.end());
+    }
 }
 
 void TrayIcon::SetDebugState(bool showDebug) {
@@ -280,7 +292,9 @@ void TrayIcon::UpdateTooltip(float, float, const std::string&, int) {}
 void TrayIcon::SetShaderList(const std::vector<std::string>&,
                               const std::vector<std::string>&,
                               const std::vector<std::string>&,
-                              const std::string&) {}
+                              const std::vector<std::string>&,
+                              const std::string&,
+                              bool) {}
 void TrayIcon::SetDebugState(bool) {}
 
 #endif

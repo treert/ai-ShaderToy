@@ -148,6 +148,8 @@ set(SOURCES
     src/d3d11_texture_manager.cpp
     src/d3d11_multi_pass.cpp
     src/d3d11_blit_renderer.cpp
+    src/stoy_parser.cpp
+    src/stoy_hlsl_generator.cpp
     src/app.rc
     ${IMGUI_SOURCES}
 )
@@ -171,6 +173,8 @@ set(HEADERS
     src/d3d11_texture_manager.h
     src/d3d11_multi_pass.h
     src/d3d11_blit_renderer.h
+    src/stoy_parser.h
+    src/stoy_hlsl_generator.h
 )
 
 add_executable(${PROJECT_NAME} WIN32 ${SOURCES} ${HEADERS})
