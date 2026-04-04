@@ -116,6 +116,14 @@ function scanCodeBlock(
     const lines = trimmedCode.split('\n');
     const startLine = codeRange.startLine;
 
+    // Track brace depth and enclosing function scope for local variable detection.
+    // depth 0 = top-level (global scope), depth > 0 = inside function/struct body.
+    let braceDepth = 0;
+    // When inside a function body, track the function's end line (physical) so
+    // local variables can be scoped to it.
+    let enclosingFuncEndLine: number | undefined;
+    let enclosingFuncStartLine: number | undefined;
+
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         const physLine = startLine + i;
@@ -132,6 +140,13 @@ function scanCodeBlock(
                 source,
                 passName,
             });
+            // Update brace depth for this line (macros can contain braces in rare cases)
+            braceDepth += countBraces(line);
+            if (braceDepth <= 0) {
+                braceDepth = 0;
+                enclosingFuncEndLine = undefined;
+                enclosingFuncStartLine = undefined;
+            }
             continue;
         }
 
@@ -158,14 +173,26 @@ function scanCodeBlock(
                     passName,
                 })),
             });
+            // Skip to struct end to avoid matching members as variables
+            if (structEndIdx >= 0) {
+                // Update brace depth: struct opens and closes
+                i = structEndIdx;
+            }
+            braceDepth += countBraces(line);
+            if (braceDepth <= 0) {
+                braceDepth = 0;
+                enclosingFuncEndLine = undefined;
+                enclosingFuncStartLine = undefined;
+            }
             continue;
         }
 
         // 函数定义：returnType functionName(params...) {
         // 匹配模式：类型 名字 ( 参数 ) {  — 排除 if/for/while 等控制流
-        const funcMatch = line.match(
+        // Only match at top-level (braceDepth === 0) to avoid matching nested function-like patterns
+        const funcMatch = braceDepth === 0 ? line.match(
             /^\s*((?:static\s+)?(?:inline\s+)?(?:const\s+)?[A-Za-z_]\w*(?:\s*<[^>]*>)?)\s+([A-Za-z_]\w*)\s*\(([^)]*)\)\s*\{?\s*$/
-        );
+        ) : null;
         if (funcMatch) {
             const retType = funcMatch[1].trim();
             const funcName = funcMatch[2];
@@ -192,14 +219,22 @@ function scanCodeBlock(
                 const paramSymbols = parseParams(params, physLine, line, funcBodyEnd >= 0 ? startLine + funcBodyEnd : undefined, source, passName);
                 symbols.push(...paramSymbols);
             }
+
+            // Enter function body scope
+            braceDepth += countBraces(line);
+            if (braceDepth > 0) {
+                enclosingFuncStartLine = physLine;
+                enclosingFuncEndLine = funcBodyEnd >= 0 ? startLine + funcBodyEnd : undefined;
+            }
             continue;
         }
 
         // 也匹配多行函数声明（参数在下一行的情况）
         // returnType funcName(
-        const funcStartMatch = line.match(
+        // Only match at top-level (braceDepth === 0)
+        const funcStartMatch = braceDepth === 0 ? line.match(
             /^\s*((?:static\s+)?(?:inline\s+)?(?:const\s+)?[A-Za-z_]\w*(?:\s*<[^>]*>)?)\s+([A-Za-z_]\w*)\s*\(\s*$/
-        );
+        ) : null;
         if (funcStartMatch) {
             const retType = funcStartMatch[1].trim();
             const funcName = funcStartMatch[2];
@@ -237,10 +272,20 @@ function scanCodeBlock(
                 const paramSymbols = parseParams(trimmedParams, physLine, line, funcBodyEnd >= 0 ? startLine + funcBodyEnd : undefined, source, passName);
                 symbols.push(...paramSymbols);
             }
+
+            // Enter function body scope (count braces from declaration line through closing line)
+            for (let k = i; k <= closingLine; k++) {
+                braceDepth += countBraces(lines[k]);
+            }
+            if (braceDepth > 0) {
+                enclosingFuncStartLine = physLine;
+                enclosingFuncEndLine = funcBodyEnd >= 0 ? startLine + funcBodyEnd : undefined;
+            }
+            i = closingLine; // Skip lines already consumed for multi-line params
             continue;
         }
 
-        // 全局/static 变量声明：[static] [const] type name [= value];
+        // Variable declaration: [static] [const] type name [= value];
         const varMatch = line.match(
             /^\s*((?:static\s+)?(?:const\s+)?)([A-Za-z_]\w*(?:\d?x\d)?)\s+([A-Za-z_]\w*)\s*(?:=|;)/
         );
@@ -251,6 +296,10 @@ function scanCodeBlock(
             // 排除控制流和类型关键字开头（如 struct Foo 已匹配）
             if (isControlKeyword(varName) || typeName === 'struct' || typeName === 'return') continue;
 
+            // If inside a function body (braceDepth > 0), this is a local variable —
+            // scope it to the enclosing function so it doesn't leak to other blocks.
+            const isLocal = braceDepth > 0;
+
             symbols.push({
                 name: varName,
                 kind: 'variable',
@@ -259,7 +308,18 @@ function scanCodeBlock(
                 col: line.indexOf(varName, line.indexOf(typeName) + typeName.length),
                 source,
                 passName,
+                ...(isLocal && enclosingFuncStartLine !== undefined && enclosingFuncEndLine !== undefined
+                    ? { scopeStartLine: enclosingFuncStartLine, scopeEndLine: enclosingFuncEndLine }
+                    : {}),
             });
+        }
+
+        // Update brace depth at end of each line (for lines not handled by struct/func above)
+        braceDepth += countBraces(line);
+        if (braceDepth <= 0) {
+            braceDepth = 0;
+            enclosingFuncEndLine = undefined;
+            enclosingFuncStartLine = undefined;
         }
     }
 
@@ -396,4 +456,19 @@ function findFuncBodyEnd(lines: string[], startIdx: number): number {
     }
 
     return -1;
+}
+
+/**
+ * Count net brace depth change for a single line.
+ * Returns positive for net opening braces, negative for net closing braces.
+ * Note: This is a simple counter that doesn't skip comments/strings for performance,
+ * which is acceptable for the symbol scanner's scope tracking purposes.
+ */
+function countBraces(line: string): number {
+    let delta = 0;
+    for (const ch of line) {
+        if (ch === '{') delta++;
+        else if (ch === '}') delta--;
+    }
+    return delta;
 }

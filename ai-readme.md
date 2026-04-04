@@ -159,5 +159,6 @@
     - [x] 假文档 didOpen/didChange/didClose 同步（复用 hlslGenerator.ts 8 层拼接）
     - [x] Diagnostics 拦截与行号映射（假 URI → .stoy 物理文件，过滤注入代码区域）
     - [x] Hover/Completion/Go-to-definition middleware 映射（双向行号映射 + fallback 到内置方案）
+    - [x] 优先级混合策略（symbolClassifier.ts 符号分类 + middleware 按类别选择 SLS/builtin 最优来源）
     - [x] 统一日志系统（logger.ts，info/debug/error 三级，`stoy.debug.log` 配置开关，本地文件日志，路径输出到 outputChannel）
   - 待实施方案：内嵌 shader-language-server（DXC 实时诊断 + tree-sitter AST，HLSL 层全面替代内置正则方案，详见 Docs/shader-language-server内嵌方案.md）

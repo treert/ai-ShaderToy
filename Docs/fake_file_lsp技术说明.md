@@ -117,6 +117,57 @@ virtualLine → physicalLine:  blockRange.startLine + (virtualLine - prefixLineC
 - shader-language-server 启动失败 → 输出错误，降级为仅内置 HLSL 提示
 - middleware 转发失败或返回空 → 回退到我们自己 Language Server 的内置方案
 
+## 优先级混合策略
+
+> 新增于 2026-04-04
+
+### 背景
+
+SLS（shader-language-server）和 builtin（内置正则方案）各有优劣：
+
+| 场景 | SLS | builtin | 更优 |
+|------|-----|---------|------|
+| 用户自定义符号作用域 | ✅ tree-sitter AST 精确 | ❌ 正则可能误匹配 | SLS |
+| HLSL 内置函数（lerp 等） | ⚠️ 简单签名 | ✅ 详细文档 + 微软链接 | builtin |
+| 框架内置变量（iResolution 等） | ⚠️ 只显示类型 | ✅ 语义描述 + inner_vars 状态 | builtin |
+| texture/pass 派生变量 | ⚠️ 只显示类型 | ✅ DSL 元数据 + 正确跳转 | builtin |
+| DXC 实时诊断 | ✅ 编译级检测 | ❌ 无 | SLS |
+
+### 符号分类器（`symbolClassifier.ts`）
+
+新增模块 `src/symbolClassifier.ts`，根据光标下的单词判定符号类别：
+
+| 类别 | 判定方式 | Hover 优先 | Definition 优先 | Completion 优先 |
+|------|---------|-----------|----------------|----------------|
+| `HlslBuiltinFunc` | 查 `findHlslFunction` | builtin | SLS | builtin |
+| `HlslBuiltinType` | 查 `findHlslType` | builtin | SLS | builtin |
+| `FrameworkVar` | 查 `BUILTIN_VAR_NAMES` | builtin | builtin | builtin |
+| `TextureDerived` | 匹配 `stoyDoc.textures` | builtin | builtin | builtin |
+| `PassDerived` | 匹配 `stoyDoc.passes` | builtin | builtin | builtin |
+| `MainImageEntry` | `word === 'mainImage'` | builtin | SLS | builtin |
+| `UserDefined` | 以上都不匹配 | SLS | SLS | SLS |
+
+### Middleware 调度逻辑
+
+**Hover / Go-to-definition：**
+1. 提取光标下单词 → `classifySymbol()` 判定类别
+2. 如果 `shouldPreferBuiltin` → 先调用 `next()`（builtin），有结果就返回；没结果再调用 SLS
+3. 如果不 prefer builtin → 先调用 SLS，没结果再调用 `next()`（builtin）
+
+**Completion：**
+1. 同时请求 SLS 和 builtin（`Promise.all` 并行）
+2. 合并两个列表：同名项按 `shouldPreferBuiltinForCompletion` 决定保留哪个版本
+3. 非同名项全部保留
+
+**Diagnostics：** 保持不变（只有 SLS 提供）。
+
+### 实现文件
+
+| 文件 | 变更 |
+|------|------|
+| `src/symbolClassifier.ts` | **新增** — 符号分类器 |
+| `src/extension.ts` | **修改** — fake_file_lsp middleware 重构为优先级混合 |
+
 ## 与内嵌方案的关系
 
 `fake_file_lsp` 是一个**轻量级 hack 方案**，不需要 Fork shader-sense 仓库。未来如果需要更深度的集成（如 semantic tokens、inactive regions），可以考虑 Fork + 最小改动方案（详见 `Docs/shader-language-server内嵌方案.md`）。

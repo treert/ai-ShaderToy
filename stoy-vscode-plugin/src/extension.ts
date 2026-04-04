@@ -20,6 +20,7 @@ import { RequestForwarder } from './requestForwarder';
 import { StoyParser } from './stoyParser';
 import { FakeFileLspManager } from './fakeFileLsp';
 import { Logger } from './logger';
+import { classifySymbol, shouldPreferBuiltinForHover, shouldPreferBuiltinForDefinition, shouldPreferBuiltinForCompletion } from './symbolClassifier';
 
 let client: LanguageClient;
 let fakeFileLspManager: FakeFileLspManager | undefined;
@@ -189,25 +190,69 @@ export function activate(context: vscode.ExtensionContext) {
         );
 
         // Middleware: forward HLSL requests to shader-language-server via sendRequest
+        // with priority mixing — prefer builtin for known symbols, SLS for user-defined
         const mgr = fakeFileLspManager;
         clientOptions = {
             documentSelector: [{ scheme: 'file', language: 'stoy' }],
             middleware: {
                 provideCompletionItem: async (document, position, context, token, next) => {
-                    const result = await tryForwardToFakeFileLsp(
-                        document, position, mgr,
-                        async (fakeUri, virtualPos) => {
-                            const items = await mgr.sendCompletionRequest(fakeUri, virtualPos, context.triggerCharacter);
-                            if (!items || items.items.length === 0) return null;
-                            return items;
-                        },
-                    );
-                    if (result !== undefined) return result;
-                    return next(document, position, context, token);
+                    // Completion: merge SLS + builtin results
+                    const stoyUri = document.uri.toString();
+                    const stoyDoc = mgr.getStoyDocument(stoyUri);
+                    const block = mgr.ready ? mgr.findHlslBlock(stoyUri, position.line, position.character) : null;
+
+                    // Request both sources in parallel when possible
+                    const slsPromise = block
+                        ? mgr.sendCompletionRequest(block.fakeUri, block.virtualPosition, context.triggerCharacter)
+                            .catch(() => null)
+                        : Promise.resolve(null);
+                    const builtinPromise = next(document, position, context, token)
+                        .then(r => r as vscode.CompletionList | vscode.CompletionItem[] | null | undefined)
+                        .catch(() => null);
+
+                    const [slsResult, builtinResult] = await Promise.all([slsPromise, builtinPromise]);
+
+                    // Normalize both to CompletionItem[]
+                    const slsItems = slsResult?.items ?? [];
+                    const builtinItems = normalizeCompletionResult(builtinResult);
+
+                    if (slsItems.length === 0) {
+                        logger.debug(`[Stoy][completion-mix] SLS empty, using builtin (${builtinItems.length} items)`);
+                        return builtinItems.length > 0 ? new vscode.CompletionList(builtinItems, false) : builtinResult;
+                    }
+                    if (builtinItems.length === 0) {
+                        logger.debug(`[Stoy][completion-mix] builtin empty, using SLS (${slsItems.length} items)`);
+                        return slsResult;
+                    }
+
+                    // Merge: for duplicate labels, prefer builtin for known symbols, SLS for user-defined
+                    const merged = mergeCompletionItems(slsItems, builtinItems, stoyDoc);
+                    logger.debug(`[Stoy][completion-mix] merged: SLS=${slsItems.length}, builtin=${builtinItems.length} → ${merged.length}`);
+                    return new vscode.CompletionList(merged, false);
                 },
 
                 provideHover: async (document, position, token, next) => {
-                    const result = await tryForwardToFakeFileLsp(
+                    const word = getWordAtCursor(document, position);
+                    const stoyUri = document.uri.toString();
+                    const stoyDoc = mgr.getStoyDocument(stoyUri);
+                    const category = word ? classifySymbol(word, stoyDoc) : undefined;
+                    const preferBuiltin = category ? shouldPreferBuiltinForHover(category) : false;
+
+                    logger.debug(`[Stoy][hover-mix] word="${word}", category=${category}, preferBuiltin=${preferBuiltin}`);
+
+                    if (preferBuiltin) {
+                        // Try builtin first
+                        const builtinResult = await next(document, position, token);
+                        if (builtinResult) {
+                            logger.debug(`[Stoy][hover-mix] using builtin result for "${word}"`);
+                            return builtinResult;
+                        }
+                        // Fallback to SLS
+                        logger.debug(`[Stoy][hover-mix] builtin null for "${word}", falling back to SLS`);
+                    }
+
+                    // Try SLS (default path, or fallback from builtin)
+                    const slsResult = await tryForwardToFakeFileLsp(
                         document, position, mgr,
                         async (fakeUri, virtualPos) => {
                             const hover = await mgr.sendHoverRequest(fakeUri, virtualPos);
@@ -215,12 +260,40 @@ export function activate(context: vscode.ExtensionContext) {
                             return mapFakeHoverRange(hover, fakeUri, mgr);
                         },
                     );
-                    if (result !== undefined) return result;
-                    return next(document, position, token);
+                    if (slsResult !== undefined) {
+                        logger.debug(`[Stoy][hover-mix] using SLS result for "${word}"`);
+                        return slsResult;
+                    }
+
+                    // Final fallback to builtin (for non-preferBuiltin path)
+                    if (!preferBuiltin) {
+                        logger.debug(`[Stoy][hover-mix] SLS null for "${word}", falling back to builtin`);
+                        return next(document, position, token);
+                    }
+                    return null;
                 },
 
                 provideDefinition: async (document, position, token, next) => {
-                    const result = await tryForwardToFakeFileLsp(
+                    const word = getWordAtCursor(document, position);
+                    const stoyUri = document.uri.toString();
+                    const stoyDoc = mgr.getStoyDocument(stoyUri);
+                    const category = word ? classifySymbol(word, stoyDoc) : undefined;
+                    const preferBuiltin = category ? shouldPreferBuiltinForDefinition(category) : false;
+
+                    logger.debug(`[Stoy][def-mix] word="${word}", category=${category}, preferBuiltin=${preferBuiltin}`);
+
+                    if (preferBuiltin) {
+                        // Try builtin first (jumps to inner_vars / texture / pass declarations)
+                        const builtinResult = await next(document, position, token);
+                        if (builtinResult) {
+                            logger.debug(`[Stoy][def-mix] using builtin result for "${word}"`);
+                            return builtinResult;
+                        }
+                        logger.debug(`[Stoy][def-mix] builtin null for "${word}", falling back to SLS`);
+                    }
+
+                    // Try SLS
+                    const slsResult = await tryForwardToFakeFileLsp(
                         document, position, mgr,
                         async (fakeUri, virtualPos) => {
                             const locs = await mgr.sendDefinitionRequest(fakeUri, virtualPos);
@@ -228,8 +301,17 @@ export function activate(context: vscode.ExtensionContext) {
                             return mapFakeDefinitionLocations(locs, document.uri, mgr);
                         },
                     );
-                    if (result !== undefined) return result;
-                    return next(document, position, token);
+                    if (slsResult !== undefined) {
+                        logger.debug(`[Stoy][def-mix] using SLS result for "${word}"`);
+                        return slsResult;
+                    }
+
+                    // Final fallback to builtin (for non-preferBuiltin path)
+                    if (!preferBuiltin) {
+                        logger.debug(`[Stoy][def-mix] SLS null for "${word}", falling back to builtin`);
+                        return next(document, position, token);
+                    }
+                    return null;
                 },
             },
         };
@@ -423,6 +505,69 @@ async function tryForwardToFakeFileLsp<T>(
         logger.error(`[Stoy][middleware] forward error: ${err}`);
         return undefined; // Silent fallback to builtin
     }
+}
+
+// ============================================================
+// Helper: get word under cursor from a TextDocument
+// ============================================================
+
+function getWordAtCursor(document: vscode.TextDocument, position: vscode.Position): string | undefined {
+    const range = document.getWordRangeAtPosition(position);
+    return range ? document.getText(range) : undefined;
+}
+
+// ============================================================
+// Helper: normalize completion result to CompletionItem[]
+// ============================================================
+
+function normalizeCompletionResult(
+    result: vscode.CompletionList | vscode.CompletionItem[] | null | undefined,
+): vscode.CompletionItem[] {
+    if (!result) return [];
+    if (Array.isArray(result)) return result;
+    if ('items' in result) return result.items;
+    return [];
+}
+
+// ============================================================
+// Helper: merge SLS and builtin completion items
+// For duplicate labels, prefer builtin for known symbols, SLS for user-defined
+// ============================================================
+
+function mergeCompletionItems(
+    slsItems: vscode.CompletionItem[],
+    builtinItems: vscode.CompletionItem[],
+    stoyDoc: import('./types').StoyDocument | undefined,
+): vscode.CompletionItem[] {
+    // Build a map of builtin items by label
+    const builtinMap = new Map<string, vscode.CompletionItem>();
+    for (const item of builtinItems) {
+        const label = typeof item.label === 'string' ? item.label : item.label.label;
+        builtinMap.set(label, item);
+    }
+
+    // Build a map of SLS items by label
+    const slsMap = new Map<string, vscode.CompletionItem>();
+    for (const item of slsItems) {
+        const label = typeof item.label === 'string' ? item.label : item.label.label;
+        slsMap.set(label, item);
+    }
+
+    const merged = new Map<string, vscode.CompletionItem>();
+
+    // Add all SLS items first
+    for (const [label, item] of slsMap) {
+        merged.set(label, item);
+    }
+
+    // Override with builtin items for known symbols, add new builtin-only items
+    for (const [label, item] of builtinMap) {
+        if (shouldPreferBuiltinForCompletion(label, stoyDoc) || !slsMap.has(label)) {
+            merged.set(label, item);
+        }
+    }
+
+    return Array.from(merged.values());
 }
 
 // ============================================================
