@@ -2315,7 +2315,6 @@ int main(int argc, char* argv[]) {
 #ifdef _WIN32
             if (useD3D11 && d3dRenderer && d3dMultiPass) {
                 // ============ D3D11 壁纸渲染路径 ============
-                Uint64 renderStart = SDL_GetPerformanceCounter();
                 auto* ctx = d3dRenderer->GetContext();
 
                 d3dMultiPass->BeginGpuTimer();
@@ -2338,9 +2337,6 @@ int main(int argc, char* argv[]) {
                 d3dMultiPass->RenderBufferPasses(ctx, currentTime, timeDelta, frameCount,
                                                   bufferMouse, date, bufferW, bufferH, clickTime);
 
-                Uint64 bufferEnd = SDL_GetPerformanceCounter();
-                float bufferTime = static_cast<float>(bufferEnd - renderStart) / static_cast<float>(freq);
-
                 for (auto& ww : wallpaperWindows) {
                     if (ww.occluded && config.pauseOnFullscreen) continue;
 
@@ -2351,11 +2347,8 @@ int main(int argc, char* argv[]) {
                     bool inMon = (localX >= 0 && localX < ww.width && localY >= 0 && localY < ww.height);
                     localMouse[0] = inMon ? localX : -1.0f;
                     localMouse[1] = inMon ? localY : -1.0f;
-                    // 使用 per-monitor 记录的点击局部坐标（不受其他显示器点击影响）
                     localMouse[2] = ww.clickActive ? ww.clickLocalX : -ww.clickLocalX;
                     localMouse[3] = ww.clickActive ? ww.clickLocalY : -ww.clickLocalY;
-
-                    Uint64 imageStart = SDL_GetPerformanceCounter();
 
                     ctx->VSSetShader(d3dRenderer->GetFullscreenVS(), nullptr, 0);
 
@@ -2379,6 +2372,9 @@ int main(int argc, char* argv[]) {
                                                        localMouse, date, ww.width, ww.height, ww.clickTime);
                     }
 
+                    // GPU timer End（幂等：只有第一次有效）
+                    d3dMultiPass->EndGpuTimer();
+
                     if (config.showDebug) {
                         fillDebugState(measuredFPS, currentTime, timeDelta, lastRenderElapsed,
                                        static_cast<float>(ww.width),
@@ -2390,14 +2386,9 @@ int main(int argc, char* argv[]) {
                     }
 
                     d3dRenderer->Present(ww.d3dSwapChainIndex, 0);
-
-                    Uint64 imageEnd = SDL_GetPerformanceCounter();
-                    float imageTime = static_cast<float>(imageEnd - imageStart) / static_cast<float>(freq);
-                    lastRenderElapsed = bufferTime + imageTime;
                 }
 
-                // GPU timer 结果（覆盖 CPU 测量值，更准确）
-                d3dMultiPass->EndGpuTimer();
+                // 使用 GPU timer 结果
                 float gpuTime = d3dMultiPass->GetGpuRenderTime();
                 if (gpuTime >= 0.0f) {
                     lastRenderElapsed = gpuTime;
@@ -2442,10 +2433,6 @@ int main(int argc, char* argv[]) {
 
             multiPass.RenderBufferPasses(quadVAO, currentTime, timeDelta, frameCount,
                                          bufferMouse, date, bufferW, bufferH, clickTime);
-            glFinish();
-
-            Uint64 bufferEnd = SDL_GetPerformanceCounter();
-            float bufferTime = static_cast<float>(bufferEnd - renderStart) / static_cast<float>(freq);
 
             // 每个显示器各渲染 Image pass + blit + debug + swap
             for (auto& ww : wallpaperWindows) {
@@ -2469,8 +2456,6 @@ int main(int argc, char* argv[]) {
                 // 使用 per-monitor 记录的点击局部坐标（不受其他显示器点击影响）
                 localMouse[2] = ww.clickActive ? ww.clickLocalX : -ww.clickLocalX;
                 localMouse[3] = ww.clickActive ? ww.clickLocalY : -ww.clickLocalY;
-
-                Uint64 imageStart = SDL_GetPerformanceCounter();
 
                 if (useScaledRender && ww.blit) {
                     int curRenderW = static_cast<int>(ww.width * config.renderScale);
@@ -2496,16 +2481,12 @@ int main(int argc, char* argv[]) {
                                              localMouse, date, ww.width, ww.height, ww.clickTime);
                 }
 
-                glFinish();
-                Uint64 imageEnd = SDL_GetPerformanceCounter();
-                float imageTime = static_cast<float>(imageEnd - imageStart) / static_cast<float>(freq);
-
-                // renderTime = Buffer pass 共享时间 + 当前显示器 Image pass 时间
-                float renderElapsed = bufferTime + imageTime;
-                lastRenderElapsed = renderElapsed;
-
                 if (config.showDebug) {
-                    fillDebugState(measuredFPS, currentTime, timeDelta, renderElapsed,
+                    glFinish();
+                    Uint64 renderEnd = SDL_GetPerformanceCounter();
+                    lastRenderElapsed = static_cast<float>(renderEnd - renderStart) / static_cast<float>(freq);
+
+                    fillDebugState(measuredFPS, currentTime, timeDelta, lastRenderElapsed,
                                    static_cast<float>(ww.width),
                                    static_cast<float>(ww.height), localMouse);
 
@@ -2514,6 +2495,13 @@ int main(int argc, char* argv[]) {
                 }
 
                 SDL_GL_SwapWindow(ww.window);
+            }
+
+            // 非 debug 模式也更新 lastRenderElapsed（用最后一帧的 glFinish 计时）
+            if (!config.showDebug) {
+                glFinish();
+                Uint64 renderEnd = SDL_GetPerformanceCounter();
+                lastRenderElapsed = static_cast<float>(renderEnd - renderStart) / static_cast<float>(freq);
             }
 
             // 每秒更新一次托盘 tooltip

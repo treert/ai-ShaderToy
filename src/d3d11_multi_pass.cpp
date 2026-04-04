@@ -646,20 +646,23 @@ void D3D11MultiPass::BeginGpuTimer() {
     if (!frame.disjoint || !frame.tsBegin) return;
     context_->Begin(frame.disjoint.Get());
     context_->End(frame.tsBegin.Get());
-    frame.active = true;
+    frame.recording = true;
+    frame.submitted = false;
 }
 
 void D3D11MultiPass::EndGpuTimer() {
     if (!context_) return;
     auto& frame = gpuTimerFrames_[gpuTimerWriteIdx_];
-    if (!frame.active || !frame.tsEnd || !frame.disjoint) return;
+    if (!frame.recording || !frame.tsEnd || !frame.disjoint) return;
     context_->End(frame.tsEnd.Get());
     context_->End(frame.disjoint.Get());
+    frame.recording = false;
+    frame.submitted = true;  // 标记为已提交待读取
 
     // 读取上一帧（另一个 slot）的结果
     int readIdx = 1 - gpuTimerWriteIdx_;
     auto& readFrame = gpuTimerFrames_[readIdx];
-    if (readFrame.active) {
+    if (readFrame.submitted) {
         D3D11_QUERY_DATA_TIMESTAMP_DISJOINT disjointData;
         UINT64 tsBegin = 0, tsEnd = 0;
         if (context_->GetData(readFrame.disjoint.Get(), &disjointData, sizeof(disjointData), D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK &&
@@ -668,7 +671,7 @@ void D3D11MultiPass::EndGpuTimer() {
             if (!disjointData.Disjoint && disjointData.Frequency > 0) {
                 gpuRenderTime_ = static_cast<float>(tsEnd - tsBegin) / static_cast<float>(disjointData.Frequency);
             }
-            readFrame.active = false;
+            readFrame.submitted = false;
         }
         // 如果 GetData 返回 S_FALSE（数据未就绪），保留上一次的 gpuRenderTime_ 不变
     }

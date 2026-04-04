@@ -209,7 +209,8 @@ private:
         ComPtr<ID3D11Query> disjoint;
         ComPtr<ID3D11Query> tsBegin;
         ComPtr<ID3D11Query> tsEnd;
-        bool active = false;
+        bool recording = false;   // 正在录制（Begin 已调用，End 未调用）
+        bool submitted = false;   // 已提交待读取（End 已调用，结果未读取）
     };
     GpuTimerFrame gpuTimerFrames_[2];
     int gpuTimerWriteIdx_ = 0;
