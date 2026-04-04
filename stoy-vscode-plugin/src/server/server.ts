@@ -14,6 +14,7 @@ import {
     HoverParams,
     DefinitionParams,
     DocumentSymbolParams,
+    FoldingRangeParams,
     SemanticTokensParams,
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
@@ -26,6 +27,7 @@ import { provideHlslHover } from './hlslHoverProvider';
 import { provideHlslCompletions } from './hlslCompletionProvider';
 import { provideHlslDefinition } from './hlslDefinitionProvider';
 import { provideDocumentSymbols } from './documentSymbolProvider';
+import { provideFoldingRanges } from './foldingRangeProvider';
 import { provideSemanticTokens, semanticTokensLegend } from './semanticTokenProvider';
 import { StoyDocument } from '../types';
 import { scanHlslSymbols, HlslSymbol } from '../hlslSymbolScanner';
@@ -56,6 +58,7 @@ connection.onInitialize((_params: InitializeParams): InitializeResult => {
             hoverProvider: true,
             definitionProvider: true,
             documentSymbolProvider: true,
+            foldingRangeProvider: true,
             semanticTokensProvider: {
                 legend: semanticTokensLegend,
                 full: true,
@@ -147,6 +150,18 @@ connection.onDocumentSymbol((params: DocumentSymbolParams) => {
         ?? docManager.getDocument(params.textDocument.uri, textDoc.getText());
     const symbols = symbolCache.get(params.textDocument.uri) ?? [];
     return provideDocumentSymbols(doc, symbols);
+});
+
+// ---- 代码折叠 (Folding) ----
+
+connection.onFoldingRanges((params: FoldingRangeParams) => {
+    const textDoc = documents.get(params.textDocument.uri);
+    if (!textDoc) return [];
+
+    const doc = docManager.getStable(params.textDocument.uri)
+        ?? docManager.getDocument(params.textDocument.uri, textDoc.getText());
+    const symbols = symbolCache.get(params.textDocument.uri) ?? [];
+    return provideFoldingRanges(doc, symbols);
 });
 
 // ---- Semantic Tokens ----
