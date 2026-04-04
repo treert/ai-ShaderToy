@@ -69,8 +69,8 @@ documents.onDidChangeContent(change => {
     const doc = docManager.parseImmediate(uri, text);
     symbolCache.set(uri, scanHlslSymbols(doc));
 
-    // 防抖推送诊断（只做诊断，不重复扫描符号）
-    docManager.onDocumentChanged(uri, text, (d) => {
+    // 防抖推送诊断（复用 parseImmediate 的缓存，不重复解析）
+    docManager.scheduleDiagnostics(uri, (d) => {
         const diagnostics = provideDslDiagnostics(d);
         connection.sendDiagnostics({ uri, diagnostics });
     });
@@ -137,7 +137,9 @@ connection.onDocumentSymbol((params: DocumentSymbolParams) => {
     const textDoc = documents.get(params.textDocument.uri);
     if (!textDoc) return [];
 
-    const doc = docManager.getDocument(params.textDocument.uri, textDoc.getText());
+    // 使用稳定版本避免编辑中 Outline 闪烁
+    const doc = docManager.getStable(params.textDocument.uri)
+        ?? docManager.getDocument(params.textDocument.uri, textDoc.getText());
     const symbols = symbolCache.get(params.textDocument.uri) ?? [];
     return provideDocumentSymbols(doc, symbols);
 });
