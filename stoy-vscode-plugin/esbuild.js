@@ -6,7 +6,7 @@ const isWatch = process.argv.includes('--watch');
 const sharedOptions = {
     bundle: true,
     minify: !isWatch,
-    sourcemap: isWatch,
+    sourcemap: true,
     platform: 'node',
     target: 'es2020',
     format: 'cjs',

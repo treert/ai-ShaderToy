@@ -53,12 +53,26 @@ export function provideDocumentSymbols(
             }
         }
 
+        const children: DocumentSymbol[] = [...enabledChildren];
+
+        // 未启用的放到单独子树
+        if (disabledChildren.length > 0) {
+            const r = toRange(doc.innerVars.range);
+            children.push({
+                name: `可用变量 (未启用 ${disabledChildren.length} 个)`,
+                kind: SymbolKind.Enum,
+                range: r,
+                selectionRange: r,
+                children: disabledChildren,
+            });
+        }
+
         result.push({
             name: 'inner_vars',
             kind: SymbolKind.Module,
             range: toRange(doc.innerVars.range),
             selectionRange: toRange(doc.innerVars.range),
-            children: [...enabledChildren, ...disabledChildren],
+            children,
         });
     }
 
