@@ -5,6 +5,7 @@
 import { Definition, Location, Position, Range } from 'vscode-languageserver';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { StoyDocument, BlockRange } from '../types';
+import { getWordAtPosition } from './utils';
 
 /** 提供 DSL 层的跳转定义 */
 export function provideDslDefinition(
@@ -43,21 +44,3 @@ function blockRangeToRange(br: BlockRange): Range {
     return Range.create(br.startLine, br.startCol, br.endLine, br.endCol);
 }
 
-function getWordAtPosition(textDoc: TextDocument, position: Position): string | null {
-    const line = textDoc.getText({
-        start: { line: position.line, character: 0 },
-        end: { line: position.line + 1, character: 0 },
-    });
-
-    let start = position.character;
-    while (start > 0 && isIdentChar(line[start - 1])) start--;
-    let end = position.character;
-    while (end < line.length && isIdentChar(line[end])) end++;
-
-    if (start === end) return null;
-    return line.substring(start, end);
-}
-
-function isIdentChar(c: string): boolean {
-    return /[a-zA-Z0-9_]/.test(c);
-}

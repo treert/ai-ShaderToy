@@ -126,12 +126,16 @@
 - [x] .stoy 示例文件（assets/stoys/minimal.stoy + assets/stoys/feedback_demo.stoy）
 - [x] .stoy 模式架构说明文档（Docs/stoy模式架构说明.md）
 - [x] VSCode 语法高亮插件（stoy-vscode-plugin/，纯声明式 TextMate Grammar，含嵌入式 HLSL 子语法）
-- [x] VSCode Language Server 智能插件（Request Forwarding 架构）
+- [x] VSCode Language Server 智能插件
   - [x] TypeScript 项目初始化（LSP client/server 分离架构，esbuild 打包）
   - [x] TypeScript .stoy 解析器（从 C++ 移植，手写递归下降，精确行号范围）
-  - [x] HLSL 虚拟文档生成器（8 层结构：cbuffer/别名/纹理/common/code/main 包装）
-  - [x] 位置映射器（物理行号 ↔ 虚拟文档行号双向映射）
   - [x] DSL 层智能提示（补全/悬停/跳转定义/诊断 4 个 provider）
-  - [x] 虚拟文档系统（TextDocumentContentProvider，按 pass/common 生成虚拟 .hlsl）
-  - [x] HLSL 请求转发（middleware 拦截，executeCommand 转发 completion/hover/definition/references/signatureHelp）
-  - [x] 扩展主入口（Language Client + 虚拟文档注册 + middleware 路由）
+  - [x] 内置 HLSL 智能提示（不依赖外部扩展）
+    - [x] HLSL 内置知识库（60+ 函数签名 + 30+ 类型，hlslBuiltins.ts）
+    - [x] HLSL 符号扫描器（正则提取用户函数/struct/变量/宏，hlslSymbolScanner.ts）
+    - [x] HLSL hover（内置函数/类型 + 框架变量 + texture/pass 派生变量 + 用户符号）
+    - [x] HLSL completion（全部上述 + HLSL 关键字 + struct 成员）
+    - [x] HLSL go-to-definition（用户符号 + texture/pass/inner_vars 跳转）
+  - [x] Server 端 DSL/HLSL 路由（按光标位置自动切换 provider）
+  - [x] 扩展主入口（纯 Language Client，无 middleware）
+  - 历史方案：虚拟文档 + 外部扩展转发（已搁置，详见 Docs/虚拟文档转发方案记录.md）

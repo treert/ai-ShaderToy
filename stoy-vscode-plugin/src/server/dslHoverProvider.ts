@@ -5,6 +5,7 @@
 import { Hover, Position, MarkupContent, MarkupKind } from 'vscode-languageserver';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { StoyDocument, BUILTIN_VARS, STOY_KEYWORDS } from '../types';
+import { getWordAtPosition } from './utils';
 
 /** 提供 DSL 层的悬停信息 */
 export function provideDslHover(
@@ -69,28 +70,6 @@ export function provideDslHover(
     }
 
     return null;
-}
-
-function getWordAtPosition(textDoc: TextDocument, position: Position): string | null {
-    const line = textDoc.getText({
-        start: { line: position.line, character: 0 },
-        end: { line: position.line + 1, character: 0 },
-    });
-
-    // 向左找单词边界
-    let start = position.character;
-    while (start > 0 && isIdentChar(line[start - 1])) start--;
-
-    // 向右找单词边界
-    let end = position.character;
-    while (end < line.length && isIdentChar(line[end])) end++;
-
-    if (start === end) return null;
-    return line.substring(start, end);
-}
-
-function isIdentChar(c: string): boolean {
-    return /[a-zA-Z0-9_]/.test(c);
 }
 
 const KEYWORD_DOCS: Record<string, string> = {
