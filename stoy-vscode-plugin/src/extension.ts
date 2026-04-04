@@ -81,15 +81,18 @@ export function activate(context: vscode.ExtensionContext) {
             documentSelector: [{ scheme: 'file', language: 'stoy' }],
             middleware: {
                 provideCompletionItem: async (document, position, context, token, next) => {
-                    const result = tryForwardToExternalLsp(
+                    const result = await tryForwardToExternalLsp(
                         document, position, stoyParser, requestForwarder,
                         async (virtualUri, virtualPos) => {
                             const items = await requestForwarder.forwardCompletion(virtualUri, virtualPos, context.triggerCharacter);
                             if (!items) return null;
-                            // CompletionList → 映射 range
+                            // CompletionList → 检查是否有实际结果
                             if ('items' in items) {
+                                if (items.items.length === 0) return null; // 空列表 → 回退到 server
                                 return mapCompletionListRanges(items, virtualUri, requestForwarder);
                             }
+                            // CompletionItem[] 的情况
+                            if (Array.isArray(items) && items.length === 0) return null;
                             return items;
                         },
                     );
@@ -193,7 +196,8 @@ async function tryForwardToExternalLsp<T>(
     if (!hlslBlock) return undefined; // 不在 HLSL 块内，透传给 server
 
     const result = await forward(hlslBlock.virtualUri, hlslBlock.virtualPosition);
-    return result ?? null; // null = 在 HLSL 块但外部扩展无结果，不透传给 server
+    // 外部扩展有结果 → 使用外部结果；无结果 → 返回 undefined 回退到 server 内置方案
+    return result ?? undefined;
 }
 
 // ============================================================
