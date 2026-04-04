@@ -15,6 +15,7 @@
 - `third_party/` — 第三方依赖（git submodule：SDL2、GLAD、ImGui、nlohmann/json）
 - `Docs/` — 项目知识库（技术文档，供 AI 读写，也供用户查阅）
   - `Docs/疑难问题记录/` — 疑难问题排查记录（OpenGL/D3D11/Windows 平台相关的问题根因分析与解决方案）
+  - `Docs/有价值的讨论/` — 技术深度讨论记录（增量解析、parser 理论等有参考价值的讨论整理）
 - `tools/` — 辅助工具（json2dir.py 等）
 
 ## 开发阶段
