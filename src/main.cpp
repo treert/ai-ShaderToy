@@ -2318,6 +2318,8 @@ int main(int argc, char* argv[]) {
                 Uint64 renderStart = SDL_GetPerformanceCounter();
                 auto* ctx = d3dRenderer->GetContext();
 
+                d3dMultiPass->BeginGpuTimer();
+
                 int bufferW = useScaledRender
                     ? std::max(1, static_cast<int>(config.width * config.renderScale))
                     : config.width;
@@ -2392,6 +2394,13 @@ int main(int argc, char* argv[]) {
                     Uint64 imageEnd = SDL_GetPerformanceCounter();
                     float imageTime = static_cast<float>(imageEnd - imageStart) / static_cast<float>(freq);
                     lastRenderElapsed = bufferTime + imageTime;
+                }
+
+                // GPU timer 结果（覆盖 CPU 测量值，更准确）
+                d3dMultiPass->EndGpuTimer();
+                float gpuTime = d3dMultiPass->GetGpuRenderTime();
+                if (gpuTime >= 0.0f) {
+                    lastRenderElapsed = gpuTime;
                 }
 
                 // 托盘 tooltip 更新
@@ -2531,6 +2540,7 @@ int main(int argc, char* argv[]) {
                 auto* ctx = d3dRenderer->GetContext();
                 bool useScaledD3D = (d3dWindowBlit && d3dWindowBlit->IsInitialized());
 
+                d3dMultiPass->BeginGpuTimer();
                 ctx->VSSetShader(d3dRenderer->GetFullscreenVS(), nullptr, 0);
 
                 if (useScaledD3D) {
@@ -2560,8 +2570,10 @@ int main(int argc, char* argv[]) {
 
                 // DebugUI 渲染
                 {
-                    Uint64 renderEnd = SDL_GetPerformanceCounter();
-                    float renderElapsed = static_cast<float>(renderEnd - renderStart) / static_cast<float>(freq);
+                    d3dMultiPass->EndGpuTimer();
+                    float gpuTime = d3dMultiPass->GetGpuRenderTime();
+                    float renderElapsed = (gpuTime >= 0.0f) ? gpuTime
+                        : static_cast<float>(SDL_GetPerformanceCounter() - renderStart) / static_cast<float>(freq);
 
                     fillDebugState(measuredFPS, currentTime, timeDelta, renderElapsed,
                                    static_cast<float>(config.width),

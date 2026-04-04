@@ -20,6 +20,16 @@ void D3D11MultiPass::SetDevice(ID3D11Device* device, ID3D11DeviceContext* contex
     desc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
     desc.MaxLOD = D3D11_FLOAT32_MAX;
     device_->CreateSamplerState(&desc, &defaultSampler_);
+
+    // 创建 GPU timestamp query（双缓冲）
+    for (int i = 0; i < 2; i++) {
+        D3D11_QUERY_DESC qd = {};
+        qd.Query = D3D11_QUERY_TIMESTAMP_DISJOINT;
+        device_->CreateQuery(&qd, &gpuTimerFrames_[i].disjoint);
+        qd.Query = D3D11_QUERY_TIMESTAMP;
+        device_->CreateQuery(&qd, &gpuTimerFrames_[i].tsBegin);
+        device_->CreateQuery(&qd, &gpuTimerFrames_[i].tsEnd);
+    }
 }
 
 bool D3D11MultiPass::Init(int width, int height) {
@@ -624,6 +634,51 @@ std::vector<std::string> D3D11MultiPass::GetPassNames() const {
     for (const auto& p : bufferPasses_) names.push_back(p.name);
     names.push_back(imagePass_.name.empty() ? "Image" : imagePass_.name);
     return names;
+}
+
+// ============================================================
+// GPU 渲染计时
+// ============================================================
+
+void D3D11MultiPass::BeginGpuTimer() {
+    if (!context_) return;
+    auto& frame = gpuTimerFrames_[gpuTimerWriteIdx_];
+    if (!frame.disjoint || !frame.tsBegin) return;
+    context_->Begin(frame.disjoint.Get());
+    context_->End(frame.tsBegin.Get());
+    frame.active = true;
+}
+
+void D3D11MultiPass::EndGpuTimer() {
+    if (!context_) return;
+    auto& frame = gpuTimerFrames_[gpuTimerWriteIdx_];
+    if (!frame.active || !frame.tsEnd || !frame.disjoint) return;
+    context_->End(frame.tsEnd.Get());
+    context_->End(frame.disjoint.Get());
+
+    // 读取上一帧（另一个 slot）的结果
+    int readIdx = 1 - gpuTimerWriteIdx_;
+    auto& readFrame = gpuTimerFrames_[readIdx];
+    if (readFrame.active) {
+        D3D11_QUERY_DATA_TIMESTAMP_DISJOINT disjointData;
+        UINT64 tsBegin = 0, tsEnd = 0;
+        if (context_->GetData(readFrame.disjoint.Get(), &disjointData, sizeof(disjointData), D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK &&
+            context_->GetData(readFrame.tsBegin.Get(), &tsBegin, sizeof(tsBegin), D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK &&
+            context_->GetData(readFrame.tsEnd.Get(), &tsEnd, sizeof(tsEnd), D3D11_ASYNC_GETDATA_DONOTFLUSH) == S_OK) {
+            if (!disjointData.Disjoint && disjointData.Frequency > 0) {
+                gpuRenderTime_ = static_cast<float>(tsEnd - tsBegin) / static_cast<float>(disjointData.Frequency);
+            }
+            readFrame.active = false;
+        }
+        // 如果 GetData 返回 S_FALSE（数据未就绪），保留上一次的 gpuRenderTime_ 不变
+    }
+
+    // 翻转写入 slot
+    gpuTimerWriteIdx_ = 1 - gpuTimerWriteIdx_;
+}
+
+float D3D11MultiPass::GetGpuRenderTime() const {
+    return gpuRenderTime_;
 }
 
 #endif // _WIN32

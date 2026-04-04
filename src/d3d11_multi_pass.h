@@ -124,6 +124,17 @@ public:
     /// 获取默认采样器
     ID3D11SamplerState* GetDefaultSampler() const { return defaultSampler_.Get(); }
 
+    // ---- GPU 渲染计时 ----
+
+    /// 开始 GPU 计时（在渲染 pass 之前调用）
+    void BeginGpuTimer();
+
+    /// 结束 GPU 计时（在渲染 pass 之后调用）
+    void EndGpuTimer();
+
+    /// 获取上一帧的 GPU 渲染耗时（秒），如果数据未就绪返回 -1
+    float GetGpuRenderTime() const;
+
     // ---- .stoy 专用接口 ----
 
     /// 设置 .stoy 纹理绑定信息（register 槽位 → SRV 映射）
@@ -192,6 +203,17 @@ private:
 
     std::array<D3D11ExternalTextureInfo, 4> externalTextures_;
     ComPtr<ID3D11SamplerState> defaultSampler_;
+
+    // GPU 渲染计时（双缓冲 timestamp query，读取上一帧结果避免 stall）
+    struct GpuTimerFrame {
+        ComPtr<ID3D11Query> disjoint;
+        ComPtr<ID3D11Query> tsBegin;
+        ComPtr<ID3D11Query> tsEnd;
+        bool active = false;
+    };
+    GpuTimerFrame gpuTimerFrames_[2];
+    int gpuTimerWriteIdx_ = 0;
+    float gpuRenderTime_ = -1.0f;  // 上一帧 GPU 渲染耗时（秒）
 
     // .stoy 模式
     bool isStoyMode_ = false;
