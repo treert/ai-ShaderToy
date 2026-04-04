@@ -39,6 +39,21 @@ const docManager = new DocumentManager();
 // HLSL 符号缓存（每次文档变更时重新扫描）
 const symbolCache = new Map<string, HlslSymbol[]>();
 
+// HLSL provider 模式（通过 workspace/configuration 获取）
+let hlslProviderMode: string = 'builtin';
+
+async function refreshHlslProviderMode(): Promise<void> {
+    try {
+        const config = await connection.workspace.getConfiguration('stoy.hlsl');
+        if (config && config.provider) {
+            hlslProviderMode = config.provider;
+            connection.console.log(`[Stoy Server] HLSL provider mode: ${hlslProviderMode}`);
+        }
+    } catch {
+        // 配置获取失败时保持当前值
+    }
+}
+
 // ---- 初始化 ----
 
 connection.onInitialize((_params: InitializeParams): InitializeResult => {
@@ -54,6 +69,15 @@ connection.onInitialize((_params: InitializeParams): InitializeResult => {
             definitionProvider: true,
         },
     };
+});
+
+connection.onInitialized(async () => {
+    await refreshHlslProviderMode();
+});
+
+// 监听配置变更
+connection.onDidChangeConfiguration(async () => {
+    await refreshHlslProviderMode();
 });
 
 // ---- 文档变更 → 解析 + 符号扫描 + 诊断 ----
@@ -88,6 +112,8 @@ connection.onCompletion((params: CompletionParams) => {
     const doc = docManager.getDocument(params.textDocument.uri, textDoc.getText());
 
     if (isInHlslBlock(doc, params.position.line)) {
+        // externalLsp 模式下不由 server 处理 HLSL，由客户端 middleware 转发
+        if (hlslProviderMode === 'externalLsp') return [];
         const symbols = symbolCache.get(params.textDocument.uri) ?? [];
         return provideHlslCompletions(doc, textDoc, params.position, symbols);
     }
@@ -104,6 +130,7 @@ connection.onHover((params: HoverParams) => {
     const doc = docManager.getDocument(params.textDocument.uri, textDoc.getText());
 
     if (isInHlslBlock(doc, params.position.line)) {
+        if (hlslProviderMode === 'externalLsp') return null;
         const symbols = symbolCache.get(params.textDocument.uri) ?? [];
         return provideHlslHover(doc, textDoc, params.position, symbols);
     }
@@ -120,6 +147,7 @@ connection.onDefinition((params: DefinitionParams) => {
     const doc = docManager.getDocument(params.textDocument.uri, textDoc.getText());
 
     if (isInHlslBlock(doc, params.position.line)) {
+        if (hlslProviderMode === 'externalLsp') return null;
         const symbols = symbolCache.get(params.textDocument.uri) ?? [];
         return provideHlslDefinition(doc, textDoc, params.position, symbols);
     }

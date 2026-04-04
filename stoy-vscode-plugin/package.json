@@ -20,6 +20,20 @@
     ],
     "main": "./out/client.js",
     "contributes": {
+        "configuration": {
+            "title": "Stoy Shader",
+            "properties": {
+                "stoy.hlsl.provider": {
+                    "type": "string",
+                    "enum": [
+                        "builtin",
+                        "externalLsp"
+                    ],
+                    "default": "builtin",
+                    "markdownDescription": "选择 HLSL 智能提示方案：\n- **builtin**：内置正则方案（默认），使用内置函数签名库 + 正则符号扫描\n- **externalLsp**：外部 LSP 方案，通过虚拟文档将 HLSL 请求转发给外部 HLSL 扩展（如 shader-validator）\n\n切换后需要重载窗口生效。"
+                }
+            }
+        },
         "languages": [
             {
                 "id": "stoy",

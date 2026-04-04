@@ -27,16 +27,16 @@ export class RequestForwarder {
                 await vscode.languages.setTextDocumentLanguage(doc, 'hlsl');
             }
             this.openedDocs.add(virtualUri);
-        } catch (err) {
-            // 如果设置语言失败也不影响
-            console.error('[Stoy] ensureVirtualDocOpened error:', err);
+        } catch {
+            // 设置语言失败不影响转发功能
         }
     }
 
     /** 虚拟文档缓存失效时清除 opened 标记 */
     invalidateOpened(physicalUri: string): void {
         for (const key of this.openedDocs) {
-            if (key.includes(physicalUri)) {
+            const parsed = parseVirtualUri(key);
+            if (parsed && parsed.physicalUri === physicalUri) {
                 this.openedDocs.delete(key);
             }
         }
@@ -128,27 +128,13 @@ export class RequestForwarder {
         try {
             await this.ensureVirtualDocOpened(virtualUri);
             const uri = vscode.Uri.parse(virtualUri);
-            console.log(`[Stoy] forwardHover: uri=${uri.toString()} scheme=${uri.scheme} line=${virtualPosition.line} char=${virtualPosition.character}`);
-            
-            // 检查虚拟文档内容
-            const openDoc = vscode.workspace.textDocuments.find(d => d.uri.toString() === uri.toString());
-            if (openDoc) {
-                console.log(`[Stoy] Virtual doc found: languageId=${openDoc.languageId} lines=${openDoc.lineCount}`);
-                const targetLine = openDoc.lineAt(virtualPosition.line).text;
-                console.log(`[Stoy] Target line: "${targetLine}"`);
-            } else {
-                console.log(`[Stoy] Virtual doc NOT found in workspace.textDocuments`);
-            }
-            
             const result = await vscode.commands.executeCommand<vscode.Hover[]>(
                 'vscode.executeHoverProvider',
                 uri,
                 virtualPosition,
             );
-            console.log(`[Stoy] forwardHover result: ${result ? `${result.length} hovers` : 'null/undefined'}`);
             return result;
-        } catch (err) {
-            console.error(`[Stoy] forwardHover error:`, err);
+        } catch {
             return undefined;
         }
     }

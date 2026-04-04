@@ -139,6 +139,11 @@
     - [x] HLSL completion（全部上述 + HLSL 关键字 + struct 成员）
     - [x] HLSL go-to-definition（用户符号 + texture/pass/inner_vars 跳转）
   - [x] Server 端 DSL/HLSL 路由（按光标位置自动切换 provider）
-  - [x] 扩展主入口（纯 Language Client，无 middleware）
-  - 历史方案：虚拟文档 + 外部扩展转发（已搁置，详见 Docs/虚拟文档转发方案记录.md）
+  - [x] 扩展主入口（Language Client + 配置驱动 middleware）
+  - [x] HLSL provider 配置切换（`stoy.hlsl.provider` 设置项，builtin/externalLsp 两种模式）
+    - [x] package.json 配置声明（枚举 + 描述 + 默认值）
+    - [x] server.ts 配置感知（workspace/configuration，externalLsp 模式下 HLSL providers 返回空）
+    - [x] extension.ts middleware（externalLsp 模式注册虚拟文档 + 拦截转发 HLSL 请求）
+    - [x] 配置变更提示重载窗口
+  - 虚拟文档 + 外部扩展转发方案（externalLsp 模式可选启用，详见 Docs/虚拟文档转发方案记录.md）
   - 待实施方案：内嵌 shader-language-server（DXC 实时诊断 + tree-sitter AST，HLSL 层全面替代内置正则方案，详见 Docs/shader-language-server内嵌方案.md）
