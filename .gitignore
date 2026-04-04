@@ -47,3 +47,7 @@ tmptmp/
 !.codebuddy/commands/
 !.codebuddy/agents/
 tests/golden_hlsl/  
+
+# VSCode 插件 bin 目录需要打包（取消 bin/ 和 *.so 等规则的忽略）
+!stoy-vscode-plugin/bin/
+!stoy-vscode-plugin/bin/**
