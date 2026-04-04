@@ -152,4 +152,12 @@
     - [x] 配置变更提示重载窗口
   - 虚拟文档 + 外部扩展转发方案（externalLsp 模式可选启用，详见 Docs/虚拟文档转发方案记录.md）
   - [x] Parser 容错解析（panic mode recovery，错误不中断后续块解析，Outline/补全/hover 不因单个错误丢失信息）
+  - [x] fake_file_lsp 模式（实验性，通过假 file:// URI 转发给 shader-language-server，详见 Docs/fake_file_lsp技术说明.md）
+    - [x] `stoy.hlsl.provider` 配置项扩展（新增 `fake_file_lsp` 选项，标注实验性）
+    - [x] 假 file:// URI 生成与管理（fakeUriManager.ts，同目录策略支持 #include）
+    - [x] 第二个 LanguageClient 生命周期管理（fakeFileLsp.ts，查找 shader-validator 扩展二进制）
+    - [x] 假文档 didOpen/didChange/didClose 同步（复用 hlslGenerator.ts 8 层拼接）
+    - [x] Diagnostics 拦截与行号映射（假 URI → .stoy 物理文件，过滤注入代码区域）
+    - [x] Hover/Completion/Go-to-definition middleware 映射（双向行号映射 + fallback 到内置方案）
+    - [x] 统一日志系统（logger.ts，info/debug/error 三级，`stoy.debug.log` 配置开关，本地文件日志，路径输出到 outputChannel）
   - 待实施方案：内嵌 shader-language-server（DXC 实时诊断 + tree-sitter AST，HLSL 层全面替代内置正则方案，详见 Docs/shader-language-server内嵌方案.md）

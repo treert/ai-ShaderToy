@@ -27,10 +27,16 @@
                     "type": "string",
                     "enum": [
                         "builtin",
-                        "externalLsp"
+                        "externalLsp",
+                        "fake_file_lsp"
                     ],
                     "default": "builtin",
-                    "markdownDescription": "选择 HLSL 智能提示方案：\n- **builtin**：内置正则方案（默认），使用内置函数签名库 + 正则符号扫描\n- **externalLsp**：外部 LSP 方案，通过虚拟文档将 HLSL 请求转发给外部 HLSL 扩展（如 shader-validator）\n\n切换后需要重载窗口生效。"
+                    "markdownDescription": "选择 HLSL 智能提示方案：\n- **builtin**：内置正则方案（默认），使用内置函数签名库 + 正则符号扫描\n- **externalLsp**：外部 LSP 方案，通过虚拟文档将 HLSL 请求转发给外部 HLSL 扩展（已搁置）\n- **fake_file_lsp**（实验性）：通过假 file:// URI 启动内置的 shader-language-server，获得 DXC 实时诊断等高级 HLSL 功能。仅支持 Windows 和 Linux。\n\n切换后需要重载窗口生效。"
+                },
+                "stoy.debug.log": {
+                    "type": "boolean",
+                    "default": false,
+                    "markdownDescription": "启用详细调试日志。开启后会在输出面板和日志文件中记录 middleware 转发、LSP 请求/响应、文档同步等详细信息。\n\n日志文件路径会在 **Stoy Language** 输出面板中显示。\n\n切换后需要重载窗口生效。"
                 }
             }
         },

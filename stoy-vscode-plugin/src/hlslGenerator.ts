@@ -6,6 +6,32 @@
 
 import { StoyDocument, BUILTIN_VARS, BUILTIN_VAR_NAMES } from './types';
 
+/**
+ * Strip leading and trailing newlines from long string content.
+ * The parser's token.value includes the \n after [=[ and the \n before ]=],
+ * but codeRange.startLine already skips past the leading newline.
+ * We must strip these boundary newlines so that split('\n') lines
+ * align exactly with codeRange line numbers.
+ */
+function stripLongStringBoundary(code: string): string {
+    let start = 0;
+    // Strip leading \r?\n (the newline right after [=[)
+    if (code.length > 0 && code[0] === '\n') {
+        start = 1;
+    } else if (code.length > 1 && code[0] === '\r' && code[1] === '\n') {
+        start = 2;
+    }
+    let end = code.length;
+    // Strip trailing \r?\n (the newline right before ]=])
+    if (end > start && code[end - 1] === '\n') {
+        end--;
+        if (end > start && code[end - 1] === '\r') {
+            end--;
+        }
+    }
+    return code.substring(start, end);
+}
+
 /** 虚拟文档生成结果 */
 export interface HlslVirtualDoc {
     /** 虚拟文档完整内容 */
@@ -112,7 +138,7 @@ export function generatePassVirtualDoc(doc: StoyDocument, passIndex: number): Hl
     // 6. common 代码
     if (doc.common && doc.common.code.trim()) {
         lines.push('// --- common code ---');
-        lines.push(...doc.common.code.split('\n'));
+        lines.push(...stripLongStringBoundary(doc.common.code).split('\n'));
         lines.push('');
     }
 
@@ -123,7 +149,7 @@ export function generatePassVirtualDoc(doc: StoyDocument, passIndex: number): Hl
         lines.push(`// --- pass code: ${doc.passes[passIndex].name} ---`);
         // prefixLineCount 需要包含这个注释行
         const actualPrefixLineCount = lines.length;
-        lines.push(...doc.passes[passIndex].code.split('\n'));
+        lines.push(...stripLongStringBoundary(doc.passes[passIndex].code).split('\n'));
         lines.push('');
 
         // 8. main 入口包装
@@ -211,7 +237,7 @@ export function generateCommonVirtualDoc(doc: StoyDocument): HlslVirtualDoc {
     if (doc.common && doc.common.code.trim()) {
         lines.push('// --- common code ---');
         const actualPrefixLineCount = lines.length;
-        lines.push(...doc.common.code.split('\n'));
+        lines.push(...stripLongStringBoundary(doc.common.code).split('\n'));
         return { content: lines.join('\n'), prefixLineCount: actualPrefixLineCount };
     }
 

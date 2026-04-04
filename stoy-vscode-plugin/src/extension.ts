@@ -2,8 +2,9 @@
 // Extension Entry — .stoy Language 扩展主入口
 // 启动 Language Client 连接 Language Server。
 // 根据 stoy.hlsl.provider 配置选择 HLSL 智能提示方案：
-//   - builtin:     所有智能提示均在 Language Server 内处理
-//   - externalLsp: HLSL 请求通过虚拟文档转发给外部 HLSL 扩展
+//   - builtin:        所有智能提示均在 Language Server 内处理
+//   - externalLsp:    HLSL 请求通过虚拟文档转发给外部 HLSL 扩展
+//   - fake_file_lsp: 通过假 file:// URI 转发给 shader-language-server
 // ============================================================
 
 import * as path from 'path';
@@ -17,17 +18,27 @@ import {
 import { VirtualDocProvider, VIRTUAL_SCHEME } from './virtualDocProvider';
 import { RequestForwarder } from './requestForwarder';
 import { StoyParser } from './stoyParser';
+import { FakeFileLspManager } from './fakeFileLsp';
+import { Logger } from './logger';
 
 let client: LanguageClient;
+let fakeFileLspManager: FakeFileLspManager | undefined;
+let logger: Logger;
 
 const outputChannel = vscode.window.createOutputChannel('Stoy Language');
 
 export function activate(context: vscode.ExtensionContext) {
-    outputChannel.appendLine('[Stoy] Extension activating...');
+    // Initialize logger with storage path for log files
+    const storagePath = context.globalStorageUri.fsPath;
+    logger = new Logger(outputChannel, storagePath);
+    logger.cleanOldLogs(10);
+    context.subscriptions.push({ dispose: () => logger.dispose() });
+
+    logger.info('[Stoy] Extension activating...');
 
     const config = vscode.workspace.getConfiguration('stoy.hlsl');
     const providerMode: string = config.get<string>('provider', 'builtin');
-    outputChannel.appendLine(`[Stoy] HLSL provider mode: ${providerMode}`);
+    logger.info(`[Stoy] HLSL provider mode: ${providerMode}`);
 
     // Language Server 配置
     const serverModule = context.asAbsolutePath(path.join('out', 'server.js'));
@@ -130,13 +141,109 @@ export function activate(context: vscode.ExtensionContext) {
             },
         };
 
-        outputChannel.appendLine('[Stoy] externalLsp mode: virtual document provider and middleware registered');
+        logger.info('[Stoy] externalLsp mode: virtual document provider and middleware registered');
+    } else if (providerMode === 'fake_file_lsp') {
+        // --- fake_file_lsp 模式：通过假 file:// URI 转发给 shader-language-server ---
+        fakeFileLspManager = new FakeFileLspManager(logger);
+
+        // Start the second LSP (shader-language-server) asynchronously
+        fakeFileLspManager.activate(context).then(success => {
+            if (success) {
+                logger.info('[Stoy] fake_file_lsp mode: shader-language-server activated');
+                // Sync already-opened .stoy files
+                for (const doc of vscode.workspace.textDocuments) {
+                    if (doc.languageId === 'stoy') {
+                        fakeFileLspManager!.syncOpen(doc.uri.toString(), doc.getText());
+                    }
+                }
+            } else {
+                logger.info('[Stoy] fake_file_lsp mode: degraded to builtin HLSL only');
+            }
+        });
+
+        // Listen for .stoy file open
+        context.subscriptions.push(
+            vscode.workspace.onDidOpenTextDocument(doc => {
+                if (doc.languageId === 'stoy' && fakeFileLspManager?.ready) {
+                    fakeFileLspManager.syncOpen(doc.uri.toString(), doc.getText());
+                }
+            }),
+        );
+
+        // Listen for .stoy file changes
+        context.subscriptions.push(
+            vscode.workspace.onDidChangeTextDocument(e => {
+                if (e.document.languageId === 'stoy' && fakeFileLspManager?.ready) {
+                    fakeFileLspManager.syncChange(e.document.uri.toString(), e.document.getText());
+                }
+            }),
+        );
+
+        // Listen for .stoy file close
+        context.subscriptions.push(
+            vscode.workspace.onDidCloseTextDocument(doc => {
+                if (doc.languageId === 'stoy' && fakeFileLspManager) {
+                    fakeFileLspManager.syncClose(doc.uri.toString());
+                }
+            }),
+        );
+
+        // Middleware: forward HLSL requests to shader-language-server via sendRequest
+        const mgr = fakeFileLspManager;
+        clientOptions = {
+            documentSelector: [{ scheme: 'file', language: 'stoy' }],
+            middleware: {
+                provideCompletionItem: async (document, position, context, token, next) => {
+                    const result = await tryForwardToFakeFileLsp(
+                        document, position, mgr,
+                        async (fakeUri, virtualPos) => {
+                            const items = await mgr.sendCompletionRequest(fakeUri, virtualPos, context.triggerCharacter);
+                            if (!items || items.items.length === 0) return null;
+                            return items;
+                        },
+                    );
+                    if (result !== undefined) return result;
+                    return next(document, position, context, token);
+                },
+
+                provideHover: async (document, position, token, next) => {
+                    const result = await tryForwardToFakeFileLsp(
+                        document, position, mgr,
+                        async (fakeUri, virtualPos) => {
+                            const hover = await mgr.sendHoverRequest(fakeUri, virtualPos);
+                            if (!hover) return null;
+                            return mapFakeHoverRange(hover, fakeUri, mgr);
+                        },
+                    );
+                    if (result !== undefined) return result;
+                    return next(document, position, token);
+                },
+
+                provideDefinition: async (document, position, token, next) => {
+                    const result = await tryForwardToFakeFileLsp(
+                        document, position, mgr,
+                        async (fakeUri, virtualPos) => {
+                            const locs = await mgr.sendDefinitionRequest(fakeUri, virtualPos);
+                            if (!locs || locs.length === 0) return null;
+                            return mapFakeDefinitionLocations(locs, document.uri, mgr);
+                        },
+                    );
+                    if (result !== undefined) return result;
+                    return next(document, position, token);
+                },
+            },
+        };
+
+        logger.info('[Stoy] fake_file_lsp mode: middleware registered, starting shader-language-server...');
     } else {
         // --- builtin 模式：无 middleware，全部由 server 处理 ---
         clientOptions = {
             documentSelector: [{ scheme: 'file', language: 'stoy' }],
         };
     }
+
+    // Merge outputChannel into clientOptions so all logs go to "Stoy Language" panel
+    clientOptions.outputChannel = logger.getOutputChannel();
 
     client = new LanguageClient(
         'stoyLanguageServer',
@@ -146,9 +253,9 @@ export function activate(context: vscode.ExtensionContext) {
     );
 
     client.start().then(() => {
-        outputChannel.appendLine('[Stoy] Language Server started successfully');
+        logger.info('[Stoy] Language Server started successfully');
     }, (err) => {
-        outputChannel.appendLine(`[Stoy] Language Server failed to start: ${err}`);
+        logger.error(`[Stoy] Language Server failed to start: ${err}`);
     });
 
     // 监听配置变更，提示重载窗口
@@ -167,12 +274,19 @@ export function activate(context: vscode.ExtensionContext) {
         }),
     );
 
-    outputChannel.appendLine('[Stoy] Extension activated');
+    logger.info('[Stoy] Extension activated');
 }
 
-export function deactivate(): Thenable<void> | undefined {
-    if (!client) return undefined;
-    return client.stop();
+export async function deactivate(): Promise<void> {
+    const promises: Promise<void>[] = [];
+    if (client) {
+        promises.push(client.stop());
+    }
+    if (fakeFileLspManager) {
+        promises.push(fakeFileLspManager.deactivate());
+        fakeFileLspManager = undefined;
+    }
+    await Promise.all(promises);
 }
 
 // ============================================================
@@ -271,4 +385,112 @@ function mapDefinitionLocations(
         // 非虚拟文档的 LocationLink 转为 Location
         return new vscode.Location(loc.targetUri, loc.targetRange);
     });
+}
+
+// ============================================================
+// Helper: fake_file_lsp 模式 — 尝试将请求转发给 shader-language-server
+// ============================================================
+
+async function tryForwardToFakeFileLsp<T>(
+    document: vscode.TextDocument,
+    position: vscode.Position,
+    mgr: FakeFileLspManager,
+    forward: (fakeUri: string, virtualPos: vscode.Position) => Promise<T | null>,
+): Promise<T | null | undefined> {
+    if (document.languageId !== 'stoy') {
+        logger.debug(`[Stoy][middleware] skip: not stoy (lang=${document.languageId})`);
+        return undefined;
+    }
+    if (!mgr.ready) {
+        logger.debug('[Stoy][middleware] skip: mgr not ready');
+        return undefined;
+    }
+
+    const stoyUri = document.uri.toString();
+    const block = mgr.findHlslBlock(stoyUri, position.line, position.character);
+    if (!block) {
+        logger.debug(`[Stoy][middleware] skip: not in HLSL block (line=${position.line}, char=${position.character})`);
+        return undefined; // Not in HLSL block → pass through to our server
+    }
+
+    logger.debug(`[Stoy][middleware] forwarding to fakeUri=${block.fakeUri}, virtualPos=(${block.virtualPosition.line},${block.virtualPosition.character})`);
+
+    try {
+        const result = await forward(block.fakeUri, block.virtualPosition);
+        logger.debug(`[Stoy][middleware] forward result: ${result !== null && result !== undefined ? 'GOT RESULT' : 'null/undefined → fallback'}`);
+        return result ?? undefined;
+    } catch (err) {
+        logger.error(`[Stoy][middleware] forward error: ${err}`);
+        return undefined; // Silent fallback to builtin
+    }
+}
+
+// ============================================================
+// Helper: fake_file_lsp 模式 — 映射 hover range 回物理文档
+// ============================================================
+
+function mapFakeHoverRange(
+    hover: vscode.Hover,
+    fakeUri: string,
+    mgr: FakeFileLspManager,
+): vscode.Hover {
+    if (hover.range) {
+        const startMapped = mgr.mapVirtualToPhysical(
+            fakeUri, hover.range.start.line, hover.range.start.character,
+        );
+        const endMapped = mgr.mapVirtualToPhysical(
+            fakeUri, hover.range.end.line, hover.range.end.character,
+        );
+        if (startMapped && endMapped) {
+            return new vscode.Hover(
+                hover.contents,
+                new vscode.Range(startMapped.line, startMapped.character, endMapped.line, endMapped.character),
+            );
+        }
+    }
+    return hover;
+}
+
+// ============================================================
+// Helper: fake_file_lsp 模式 — 映射 definition locations 回物理文档
+// ============================================================
+
+function mapFakeDefinitionLocations(
+    locs: (vscode.Location | vscode.LocationLink)[],
+    physicalDocUri: vscode.Uri,
+    mgr: FakeFileLspManager,
+): vscode.Definition | vscode.DefinitionLink[] {
+    return locs.map(loc => {
+        if (loc instanceof vscode.Location) {
+            // If definition is in a fake URI, map back to physical .stoy file
+            if (mgr.fakeUris.isFakeUri(loc.uri.toString())) {
+                const mapped = mgr.mapVirtualToPhysical(
+                    loc.uri.toString(), loc.range.start.line, loc.range.start.character,
+                );
+                if (mapped) {
+                    return new vscode.Location(
+                        physicalDocUri,
+                        new vscode.Range(mapped.line, mapped.character, mapped.line, mapped.character),
+                    );
+                }
+                // Definition in injected code region → drop it
+                return null;
+            }
+            return loc;
+        }
+        // LocationLink
+        if (mgr.fakeUris.isFakeUri(loc.targetUri.toString())) {
+            const mapped = mgr.mapVirtualToPhysical(
+                loc.targetUri.toString(), loc.targetRange.start.line, loc.targetRange.start.character,
+            );
+            if (mapped) {
+                return new vscode.Location(
+                    physicalDocUri,
+                    new vscode.Range(mapped.line, mapped.character, mapped.line, mapped.character),
+                );
+            }
+            return null;
+        }
+        return new vscode.Location(loc.targetUri, loc.targetRange);
+    }).filter((loc): loc is vscode.Location => loc !== null);
 }
