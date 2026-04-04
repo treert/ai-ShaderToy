@@ -121,6 +121,7 @@ function symbolKindToCompletionKind(kind: string): CompletionItemKind {
         case 'function': return CompletionItemKind.Function;
         case 'struct': return CompletionItemKind.Struct;
         case 'variable': return CompletionItemKind.Variable;
+        case 'parameter': return CompletionItemKind.Variable;
         case 'macro': return CompletionItemKind.Constant;
         case 'field': return CompletionItemKind.Field;
         default: return CompletionItemKind.Text;

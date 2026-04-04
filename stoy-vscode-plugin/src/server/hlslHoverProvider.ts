@@ -7,7 +7,7 @@ import { Hover, MarkupKind, Position } from 'vscode-languageserver';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { StoyDocument, BUILTIN_VARS } from '../types';
 import { findHlslFunction, findHlslType, getHlslDocUrl, getHlslTypeDocUrl } from '../hlslBuiltins';
-import { HlslSymbol, scanHlslSymbols, getVisibleSymbols } from '../hlslSymbolScanner';
+import { HlslSymbol, getVisibleSymbols } from '../hlslSymbolScanner';
 import { getWordAtPosition } from './utils';
 
 export function provideHlslHover(
@@ -120,8 +120,12 @@ export function provideHlslHover(
     const userSym = visible.find(s => s.name === word);
     if (userSym) {
         let md = `\`\`\`hlsl\n${userSym.signature}\n\`\`\``;
-        const loc = userSym.source === 'common' ? 'common 块' : `pass ${userSym.passName}`;
-        md += `\n\n*定义于 ${loc} (line ${userSym.line + 1})*`;
+        if (userSym.kind === 'parameter') {
+            md += `\n\n*(parameter)*`;
+        } else {
+            const loc = userSym.source === 'common' ? 'common 块' : `pass ${userSym.passName}`;
+            md += `\n\n*定义于 ${loc} (line ${userSym.line + 1})*`;
+        }
         if (userSym.kind === 'struct' && userSym.members && userSym.members.length > 0) {
             md += '\n\n**Members:**\n';
             for (const m of userSym.members) {
