@@ -141,3 +141,4 @@
   - [x] Server 端 DSL/HLSL 路由（按光标位置自动切换 provider）
   - [x] 扩展主入口（纯 Language Client，无 middleware）
   - 历史方案：虚拟文档 + 外部扩展转发（已搁置，详见 Docs/虚拟文档转发方案记录.md）
+  - 待实施方案：内嵌 shader-language-server（DXC 实时诊断 + tree-sitter AST，HLSL 层全面替代内置正则方案，详见 Docs/shader-language-server内嵌方案.md）
