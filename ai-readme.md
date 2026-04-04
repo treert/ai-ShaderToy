@@ -124,4 +124,5 @@
 - [x] 渲染管线集成（D3D11MultiPass .stoy 纹理绑定，独立于 ShaderToy 模式）
 - [x] .stoy 独立模式分支（不经过 ShaderProject，走 StoyParser → StoyHlslGenerator → D3D11MultiPass 独立路径）
 - [x] .stoy 示例文件（assets/stoys/minimal.stoy + assets/stoys/feedback_demo.stoy）
+- [x] .stoy 模式架构说明文档（Docs/stoy模式架构说明.md）
 - [ ] VSCode 语法高亮插件

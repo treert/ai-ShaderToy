@@ -151,6 +151,12 @@ public:
     /// imagePassSlot = image pass 的输出纹理 register 槽位
     void SetStoyPassOutputSlots(const std::vector<int>& passOutputSlots, int imagePassSlot);
 
+    /// 设置 .stoy TexelSize 数据（外部纹理 + pass 输出纹理的 1/width, 1/height, width, height）
+    void SetStoyTexelSizes(const std::vector<float>& texelSizeData);
+
+    /// 为 Image pass 创建双缓冲 FBO（当 Image pass 被其他 pass 引用时调用）
+    bool EnableImagePassFBO();
+
 private:
     bool CreateFBO(D3D11RenderPass& pass, int width, int height);
     bool CreateCubeMapFBO(D3D11RenderPass& pass, int cubeSize);
@@ -192,6 +198,9 @@ private:
     std::vector<StoyTextureSRV> stoyExternalTextures_;
     std::vector<int> stoyPassOutputSlots_;      // buffer pass i → register 槽位
     int stoyImagePassSlot_ = -1;                // image pass → register 槽位
+    bool stoyImagePassNeedsFBO_ = false;        // image pass 被引用时需要双缓冲 FBO
+    ComPtr<ID3D11Buffer> stoyTexParamsCB_;      // cbuffer TextureParams : register(b1)
+    std::vector<float> stoyTexelSizeData_;      // TexelSize float4 数组（CPU 侧数据）
 };
 
 #endif // _WIN32

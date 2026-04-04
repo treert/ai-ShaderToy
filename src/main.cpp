@@ -33,6 +33,7 @@
 #include "file_dialog.h"
 #include "stoy_parser.h"
 #include "stoy_hlsl_generator.h"
+#include "stb_image.h"
 
 #ifdef _WIN32
 #include "d3d11_renderer.h"
@@ -812,6 +813,19 @@ int main(int argc, char* argv[]) {
     StoyFileData stoyData;
     StoyHlslResult stoyHlsl;
 
+#ifdef _WIN32
+    // .stoy 专用纹理存储（不使用 D3D11TextureManager，无数量限制）
+    struct StoyLoadedTexture {
+        std::string name;
+        ComPtr<ID3D11Texture2D> texture;
+        ComPtr<ID3D11ShaderResourceView> srv;
+        ComPtr<ID3D11SamplerState> sampler;  // 按 filter/wrap 创建的采样器
+        int width = 0;
+        int height = 0;
+    };
+    std::vector<StoyLoadedTexture> stoyLoadedTextures;
+#endif
+
     ShaderProject project;  // ShaderToy 模式使用
 
     if (config.isStoyMode) {
@@ -1144,36 +1158,32 @@ int main(int argc, char* argv[]) {
                                              true, shaderDir, assetsDir)) return false;
         }
 
-        // 设置外部纹理 SRV
-        if (d3dTextures) {
-            for (int i = 0; i < 4; ++i) {
-                if (d3dTextures->HasTexture(i)) {
-                    float tw, th;
-                    d3dTextures->GetResolution(i, tw, th);
-                    d3dMultiPass->SetExternalTexture(i, d3dTextures->GetSRV(i),
-                                                      static_cast<int>(tw), static_cast<int>(th),
-                                                      d3dTextures->GetChannelType(i));
-                }
+        // 如果 Image pass 被其他 pass 引用，启用双缓冲 FBO
+        if (stoyData.IsLastPassReferenced()) {
+            if (!d3dMultiPass->EnableImagePassFBO()) {
+                std::cerr << "Warning: failed to create FBO for Image pass self-reference" << std::endl;
             }
         }
 
-        // .stoy 纹理绑定（register 槽位映射）
+        // .stoy 纹理绑定（register 槽位映射，从 stoyLoadedTextures 读取）
         std::vector<D3D11MultiPass::StoyTextureSRV> stoyTexSrvs;
         for (const auto& binding : stoyHlsl.textureBindings) {
             if (!binding.isPassOutput) {
                 D3D11MultiPass::StoyTextureSRV texSrv;
                 texSrv.registerSlot = binding.registerSlot;
-                for (int ti = 0; ti < (int)stoyData.textures.size(); ti++) {
-                    if (stoyData.textures[ti].name == binding.name) {
-                        if (d3dTextures && d3dTextures->HasTexture(ti)) {
-                            texSrv.srv = d3dTextures->GetSRV(ti);
-                            float tw, th;
-                            d3dTextures->GetResolution(ti, tw, th);
-                            texSrv.width = static_cast<int>(tw);
-                            texSrv.height = static_cast<int>(th);
-                        }
+                // 在 stoyLoadedTextures 中查找同名纹理
+                for (const auto& lt : stoyLoadedTextures) {
+                    if (lt.name == binding.name && lt.srv) {
+                        texSrv.srv = lt.srv.Get();
+                        texSrv.sampler = lt.sampler.Get();  // 按 filter/wrap 创建的采样器
+                        texSrv.width = lt.width;
+                        texSrv.height = lt.height;
                         break;
                     }
+                }
+                if (!texSrv.srv) {
+                    std::cerr << "Warning: stoy texture '" << binding.name
+                              << "' not loaded (register t" << binding.registerSlot << ")" << std::endl;
                 }
                 stoyTexSrvs.push_back(texSrv);
             }
@@ -1197,24 +1207,110 @@ int main(int argc, char* argv[]) {
         }
         d3dMultiPass->SetStoyPassOutputSlots(passOutputSlots, imagePassSlot);
 
+        // 计算并设置 TexelSize 数据（外部纹理 + pass 输出纹理，每个 4 floats）
+        // 布局：[1/w, 1/h, w, h] 对每个纹理
+        {
+            std::vector<float> texelData;
+            // 外部纹理
+            for (const auto& lt : stoyLoadedTextures) {
+                float w = static_cast<float>(lt.width);
+                float h = static_cast<float>(lt.height);
+                texelData.push_back(w > 0 ? 1.0f / w : 0.0f);
+                texelData.push_back(h > 0 ? 1.0f / h : 0.0f);
+                texelData.push_back(w);
+                texelData.push_back(h);
+            }
+            // pass 输出纹理（尺寸 = 渲染分辨率）
+            float rw = static_cast<float>(config.width);
+            float rh = static_cast<float>(config.height);
+            for (int i = 0; i < numPasses; i++) {
+                texelData.push_back(rw > 0 ? 1.0f / rw : 0.0f);
+                texelData.push_back(rh > 0 ? 1.0f / rh : 0.0f);
+                texelData.push_back(rw);
+                texelData.push_back(rh);
+            }
+            d3dMultiPass->SetStoyTexelSizes(texelData);
+        }
+
         return true;
     };
 
-    // ---- .stoy 独立分支：纹理加载 ----
+    // ---- .stoy 独立分支：纹理加载（直接创建 D3D11 纹理，不限数量） ----
     auto LoadD3D11StoyTextures = [&]() {
-        if (!d3dTextures) return;
-        d3dTextures->Clear();
+        if (!d3dRenderer) return;
+        stoyLoadedTextures.clear();
 
-        if ((int)stoyData.textures.size() > 4) {
-            std::cerr << "Warning: .stoy declares " << stoyData.textures.size()
-                      << " textures, but only first 4 are supported in this version" << std::endl;
-        }
-        for (int i = 0; i < (int)stoyData.textures.size() && i < 4; i++) {
-            const auto& tex = stoyData.textures[i];
+        auto* device = d3dRenderer->GetDevice();
+        for (const auto& tex : stoyData.textures) {
             std::string texPath = stoyData.stoyDir.empty()
                 ? tex.path
                 : stoyData.stoyDir + "/" + tex.path;
-            d3dTextures->LoadTexture(i, texPath);
+
+            int imgW, imgH, imgC;
+            unsigned char* data = stbi_load(texPath.c_str(), &imgW, &imgH, &imgC, 4);
+            if (!data) {
+                std::cerr << "Stoy texture load failed: " << texPath << std::endl;
+                stoyLoadedTextures.push_back({tex.name, nullptr, nullptr, 0, 0});
+                continue;
+            }
+
+            D3D11_TEXTURE2D_DESC texDesc = {};
+            texDesc.Width = static_cast<UINT>(imgW);
+            texDesc.Height = static_cast<UINT>(imgH);
+            texDesc.MipLevels = 1;
+            texDesc.ArraySize = 1;
+            texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+            texDesc.SampleDesc.Count = 1;
+            texDesc.Usage = D3D11_USAGE_IMMUTABLE;
+            texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+            D3D11_SUBRESOURCE_DATA initData = {};
+            initData.pSysMem = data;
+            initData.SysMemPitch = static_cast<UINT>(imgW * 4);
+
+            StoyLoadedTexture loaded;
+            loaded.name = tex.name;
+            loaded.width = imgW;
+            loaded.height = imgH;
+
+            HRESULT hr = device->CreateTexture2D(&texDesc, &initData, &loaded.texture);
+            stbi_image_free(data);
+            if (FAILED(hr)) {
+                std::cerr << "Stoy CreateTexture2D failed: " << texPath << std::endl;
+                stoyLoadedTextures.push_back({tex.name, nullptr, nullptr, 0, 0});
+                continue;
+            }
+
+            D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+            srvDesc.Format = texDesc.Format;
+            srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            srvDesc.Texture2D.MipLevels = 1;
+
+            hr = device->CreateShaderResourceView(loaded.texture.Get(), &srvDesc, &loaded.srv);
+            if (FAILED(hr)) {
+                std::cerr << "Stoy CreateSRV failed: " << texPath << std::endl;
+                stoyLoadedTextures.push_back({tex.name, nullptr, nullptr, 0, 0});
+                continue;
+            }
+
+            std::cout << "Stoy texture loaded: " << texPath
+                      << " (" << imgW << "x" << imgH << ")" << std::endl;
+
+            // 根据 filter/wrap 属性创建采样器
+            D3D11_SAMPLER_DESC sampDesc = {};
+            sampDesc.Filter = (tex.filter == "point")
+                ? D3D11_FILTER_MIN_MAG_MIP_POINT
+                : D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+            D3D11_TEXTURE_ADDRESS_MODE addrMode = D3D11_TEXTURE_ADDRESS_CLAMP;
+            if (tex.wrap == "repeat") addrMode = D3D11_TEXTURE_ADDRESS_WRAP;
+            else if (tex.wrap == "mirror") addrMode = D3D11_TEXTURE_ADDRESS_MIRROR;
+            sampDesc.AddressU = addrMode;
+            sampDesc.AddressV = addrMode;
+            sampDesc.AddressW = addrMode;
+            sampDesc.MaxLOD = D3D11_FLOAT32_MAX;
+            device->CreateSamplerState(&sampDesc, &loaded.sampler);
+
+            stoyLoadedTextures.push_back(std::move(loaded));
         }
     };
 

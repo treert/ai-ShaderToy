@@ -37,6 +37,9 @@ void D3D11MultiPass::Clear() {
     lastError_.clear();
     externalTextures_ = {};
     imageTargetRTV_ = nullptr;
+    stoyImagePassNeedsFBO_ = false;
+    stoyTexParamsCB_.Reset();
+    stoyTexelSizeData_.clear();
 }
 
 void D3D11MultiPass::Resize(int width, int height) {
@@ -44,6 +47,9 @@ void D3D11MultiPass::Resize(int width, int height) {
     height_ = height;
     for (auto& pass : bufferPasses_) {
         CreateFBO(pass, width, height);
+    }
+    if (stoyImagePassNeedsFBO_) {
+        CreateFBO(imagePass_, width, height);
     }
 }
 
@@ -332,6 +338,37 @@ void D3D11MultiPass::SetStoyPassOutputSlots(const std::vector<int>& passOutputSl
     stoyImagePassSlot_ = imagePassSlot;
 }
 
+bool D3D11MultiPass::EnableImagePassFBO() {
+    stoyImagePassNeedsFBO_ = true;
+    return CreateFBO(imagePass_, width_, height_);
+}
+
+void D3D11MultiPass::SetStoyTexelSizes(const std::vector<float>& texelSizeData) {
+    stoyTexelSizeData_ = texelSizeData;
+    if (texelSizeData.empty() || !device_) return;
+
+    // 创建或重建 cbuffer（大小可能变化）
+    UINT byteWidth = static_cast<UINT>(texelSizeData.size() * sizeof(float));
+    // 对齐到 16 字节
+    byteWidth = (byteWidth + 15) & ~15;
+
+    bool needRecreate = !stoyTexParamsCB_;
+    if (stoyTexParamsCB_) {
+        D3D11_BUFFER_DESC existingDesc;
+        stoyTexParamsCB_->GetDesc(&existingDesc);
+        if (existingDesc.ByteWidth != byteWidth) needRecreate = true;
+    }
+    if (needRecreate) {
+        stoyTexParamsCB_.Reset();
+        D3D11_BUFFER_DESC cbDesc = {};
+        cbDesc.ByteWidth = byteWidth;
+        cbDesc.Usage = D3D11_USAGE_DYNAMIC;
+        cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+        device_->CreateBuffer(&cbDesc, nullptr, &stoyTexParamsCB_);
+    }
+}
+
 ID3D11ShaderResourceView* D3D11MultiPass::GetBufferOutputSRVPrev(int index) const {
     if (index < 0 || index >= static_cast<int>(bufferPasses_.size())) return nullptr;
     return bufferPasses_[index].outputSRVPrev.Get();
@@ -446,6 +483,21 @@ void D3D11MultiPass::RenderSinglePass(D3D11RenderPass& pass, float time, float t
     pass.shader.UpdateConstants(cb);
     pass.shader.Use();
 
+    // .stoy 模式：更新并绑定 TextureParams cbuffer (b1)
+    if (isStoyMode_ && stoyTexParamsCB_ && !stoyTexelSizeData_.empty()) {
+        // 更新 pass 输出纹理的 TexelSize（尺寸可能随窗口变化）
+        // 外部纹理的 TexelSize 在 SetStoyTexelSizes 时已设置，这里只需更新 pass 输出的
+        D3D11_MAPPED_SUBRESOURCE mapped;
+        HRESULT hr = context_->Map(stoyTexParamsCB_.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+        if (SUCCEEDED(hr)) {
+            memcpy(mapped.pData, stoyTexelSizeData_.data(),
+                   stoyTexelSizeData_.size() * sizeof(float));
+            context_->Unmap(stoyTexParamsCB_.Get(), 0);
+        }
+        ID3D11Buffer* cb1 = stoyTexParamsCB_.Get();
+        context_->PSSetConstantBuffers(1, 1, &cb1);
+    }
+
     DrawFullscreenTriangle();
 
     // 解绑 SRV（防止 SRV/RTV 冲突）
@@ -556,6 +608,13 @@ void D3D11MultiPass::SwapBuffers() {
             rtvDesc.Texture2DArray.ArraySize = 1;
             device_->CreateRenderTargetView(cubeMapPass_.cubeMapTexture.Get(), &rtvDesc, &cubeMapPass_.cubeFaceRTV[face]);
         }
+    }
+    // .stoy 模式：Image pass 也需要双缓冲交换
+    if (stoyImagePassNeedsFBO_ && imagePass_.outputTexture) {
+        std::swap(imagePass_.outputTexture, imagePass_.outputTexturePrev);
+        std::swap(imagePass_.outputSRV, imagePass_.outputSRVPrev);
+        imagePass_.outputRTV.Reset();
+        device_->CreateRenderTargetView(imagePass_.outputTexture.Get(), nullptr, &imagePass_.outputRTV);
     }
 }
 
