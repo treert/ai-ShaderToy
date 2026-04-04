@@ -125,4 +125,4 @@
 - [x] .stoy 独立模式分支（不经过 ShaderProject，走 StoyParser → StoyHlslGenerator → D3D11MultiPass 独立路径）
 - [x] .stoy 示例文件（assets/stoys/minimal.stoy + assets/stoys/feedback_demo.stoy）
 - [x] .stoy 模式架构说明文档（Docs/stoy模式架构说明.md）
-- [ ] VSCode 语法高亮插件
+- [x] VSCode 语法高亮插件（stoy-vscode-plugin/，纯声明式 TextMate Grammar，含嵌入式 HLSL 子语法）

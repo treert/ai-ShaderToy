@@ -1,0 +1,38 @@
+{
+    "name": "stoy-syntax",
+    "displayName": "Stoy Shader Format",
+    "description": "Syntax highlighting for .stoy shader description files (ai-ShaderToy project)",
+    "version": "1.0.0",
+    "publisher": "ai-shadertoy",
+    "engines": {
+        "vscode": "^1.60.0"
+    },
+    "categories": [
+        "Programming Languages"
+    ],
+    "contributes": {
+        "languages": [
+            {
+                "id": "stoy",
+                "aliases": [
+                    "Stoy Shader",
+                    "stoy"
+                ],
+                "extensions": [
+                    ".stoy"
+                ],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "stoy",
+                "scopeName": "source.stoy",
+                "path": "./syntaxes/stoy.tmLanguage.json",
+                "embeddedLanguages": {
+                    "meta.embedded.block.hlsl.stoy": "hlsl"
+                }
+            }
+        ]
+    }
+}

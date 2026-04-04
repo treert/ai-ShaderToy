@@ -1,0 +1,154 @@
+{
+    "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+    "name": "Stoy Shader",
+    "scopeName": "source.stoy",
+    "patterns": [
+        { "include": "#comment" },
+        { "include": "#code-long-string" },
+        { "include": "#common-long-string" },
+        { "include": "#pass-declaration" },
+        { "include": "#texture-declaration" },
+        { "include": "#long-string" },
+        { "include": "#keywords" },
+        { "include": "#type-keywords" },
+        { "include": "#boolean" },
+        { "include": "#builtin-vars" },
+        { "include": "#property-names" },
+        { "include": "#string" },
+        { "include": "#number" },
+        { "include": "#punctuation" }
+    ],
+    "repository": {
+        "comment": {
+            "name": "comment.line.double-dash.stoy",
+            "match": "--.*$"
+        },
+
+        "pass-declaration": {
+            "match": "\\b(pass)\\s+([A-Za-z_]\\w*)",
+            "captures": {
+                "1": { "name": "keyword.control.pass.stoy" },
+                "2": { "name": "entity.name.type.pass.stoy" }
+            }
+        },
+
+        "texture-declaration": {
+            "match": "\\b(texture)\\s+([A-Za-z_]\\w*)",
+            "captures": {
+                "1": { "name": "keyword.control.texture.stoy" },
+                "2": { "name": "entity.name.type.texture.stoy" }
+            }
+        },
+
+        "code-long-string": {
+            "begin": "\\b(code)\\s*(\\[(=*)\\[)",
+            "beginCaptures": {
+                "1": { "name": "keyword.control.code.stoy" },
+                "2": { "name": "punctuation.definition.string.begin.stoy" }
+            },
+            "end": "\\]\\3\\]",
+            "endCaptures": {
+                "0": { "name": "punctuation.definition.string.end.stoy" }
+            },
+            "name": "meta.embedded.block.hlsl.stoy",
+            "patterns": [
+                { "include": "#hlsl-code" }
+            ]
+        },
+
+        "common-long-string": {
+            "begin": "\\b(common)\\s*(\\[(=*)\\[)",
+            "beginCaptures": {
+                "1": { "name": "keyword.control.common.stoy" },
+                "2": { "name": "punctuation.definition.string.begin.stoy" }
+            },
+            "end": "\\]\\3\\]",
+            "endCaptures": {
+                "0": { "name": "punctuation.definition.string.end.stoy" }
+            },
+            "name": "meta.embedded.block.hlsl.stoy",
+            "patterns": [
+                { "include": "#hlsl-code" }
+            ]
+        },
+
+        "long-string": {
+            "begin": "\\[(=*)\\[",
+            "beginCaptures": {
+                "0": { "name": "punctuation.definition.string.begin.stoy" }
+            },
+            "end": "\\]\\1\\]",
+            "endCaptures": {
+                "0": { "name": "punctuation.definition.string.end.stoy" }
+            },
+            "name": "string.quoted.other.multiline.stoy"
+        },
+
+        "keywords": {
+            "match": "\\b(global_setting|inner_vars|texture|common|pass|init|code)\\b",
+            "name": "keyword.control.stoy"
+        },
+
+        "type-keywords": {
+            "match": "\\b(float4)\\b",
+            "name": "storage.type.stoy"
+        },
+
+        "boolean": {
+            "match": "\\b(true|false)\\b",
+            "name": "constant.language.boolean.stoy"
+        },
+
+        "builtin-vars": {
+            "patterns": [
+                { "include": "#hlsl-stoy-builtins" }
+            ]
+        },
+
+        "property-names": {
+            "match": "\\b(filter|wrap|type|format|msaa|vsync|resolution_scale)\\b",
+            "name": "variable.other.property.stoy"
+        },
+
+        "string": {
+            "begin": "\"",
+            "beginCaptures": {
+                "0": { "name": "punctuation.definition.string.begin.stoy" }
+            },
+            "end": "\"|(?=\\n)",
+            "endCaptures": {
+                "0": { "name": "punctuation.definition.string.end.stoy" }
+            },
+            "name": "string.quoted.double.stoy",
+            "patterns": [
+                {
+                    "match": "\\\\(?:[\"\\\\/ntr])",
+                    "name": "constant.character.escape.stoy"
+                }
+            ]
+        },
+
+        "number": {
+            "match": "-?\\b\\d+(?:\\.\\d+)?\\b",
+            "name": "constant.numeric.stoy"
+        },
+
+        "punctuation": {
+            "match": "[{}()=,]",
+            "name": "punctuation.stoy"
+        },
+
+        "hlsl-code": {
+            "comment": "stoy builtins match first, then fallback to external HLSL extension grammar",
+            "patterns": [
+                { "include": "#hlsl-stoy-builtins" },
+                { "include": "source.hlsl" }
+            ]
+        },
+
+        "hlsl-stoy-builtins": {
+            "match": "\\b(iResolution|iTime|iTimeDelta|iFrame|iFrameRate|iMouse|iDate|iSampleRate)\\b",
+            "name": "variable.language.builtin.stoy"
+        }
+    }
+}
