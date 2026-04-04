@@ -1236,15 +1236,26 @@ int main(int argc, char* argv[]) {
     };
 
     // ---- .stoy 独立分支：纹理加载（直接创建 D3D11 纹理，不限数量） ----
+
+    // .stoy 纹理路径解析辅助函数（相对于 .stoy 文件所在目录，支持 ../ 和绝对路径）
+    auto ResolveStoyTexturePath = [&](const std::string& texRelPath) -> std::string {
+        namespace fs = std::filesystem;
+        fs::path p(texRelPath);
+        if (p.is_absolute()) return texRelPath;
+        if (stoyData.stoyDir.empty()) return texRelPath;
+        fs::path resolved = fs::path(stoyData.stoyDir) / p;
+        std::error_code ec;
+        auto canonical = fs::weakly_canonical(resolved, ec);
+        return ec ? resolved.string() : canonical.string();
+    };
+
     auto LoadD3D11StoyTextures = [&]() {
         if (!d3dRenderer) return;
         stoyLoadedTextures.clear();
 
         auto* device = d3dRenderer->GetDevice();
         for (const auto& tex : stoyData.textures) {
-            std::string texPath = stoyData.stoyDir.empty()
-                ? tex.path
-                : stoyData.stoyDir + "/" + tex.path;
+            std::string texPath = ResolveStoyTexturePath(tex.path);
 
             int imgW, imgH, imgC;
             unsigned char* data = stbi_load(texPath.c_str(), &imgW, &imgH, &imgC, 4);
@@ -1440,8 +1451,7 @@ int main(int argc, char* argv[]) {
                 shaderNeedsReload.store(true);
             });
             for (const auto& tex : stoyData.textures) {
-                std::string texPath = stoyData.stoyDir.empty()
-                    ? tex.path : stoyData.stoyDir + "/" + tex.path;
+                std::string texPath = ResolveStoyTexturePath(tex.path);
                 watcher.AddFile(texPath);
             }
         } else {
@@ -1523,8 +1533,7 @@ int main(int argc, char* argv[]) {
                     shaderNeedsReload.store(true);
                 });
                 for (const auto& tex : stoyData.textures) {
-                    std::string texPath = stoyData.stoyDir.empty()
-                        ? tex.path : stoyData.stoyDir + "/" + tex.path;
+                    std::string texPath = ResolveStoyTexturePath(tex.path);
                     watcher.AddFile(texPath);
                 }
             } else {

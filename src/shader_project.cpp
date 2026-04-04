@@ -648,9 +648,30 @@ std::string ShaderProject::ResolveTexturePath(const std::string& filepath,
     if (filepath.empty()) return filepath;
 
     fs::path srcPath(filepath);
+
+    // 绝对路径直接使用
+    if (srcPath.is_absolute()) {
+        if (fs::exists(srcPath, std::error_code{})) {
+            return srcPath.string();
+        }
+        std::cerr << "Warning: texture not found: " << filepath << std::endl;
+        return filepath;
+    }
+
     std::string filename = srcPath.filename().string();
 
-    // 1. JSON 同目录 + 文件名
+    // 1. JSON/shader 同目录 + 完整相对路径（保留子目录结构，支持 ../）
+    {
+        fs::path resolved = fs::path(jsonDir) / srcPath;
+        std::error_code ec;
+        auto canonical = fs::weakly_canonical(resolved, ec);
+        std::string resolvedStr = ec ? resolved.string() : canonical.string();
+        if (fs::exists(resolvedStr, std::error_code{})) {
+            return resolvedStr;
+        }
+    }
+
+    // 2. JSON/shader 同目录 + 仅文件名（兼容旧行为）
     {
         std::string localPath = jsonDir + "/" + filename;
         if (fs::exists(localPath, std::error_code{})) {
@@ -658,10 +679,9 @@ std::string ShaderProject::ResolveTexturePath(const std::string& filepath,
         }
     }
 
-    // 2. assets/ + filepath（去掉前导斜杠），支持 /media/a/xxx.jpg -> assets/media/a/xxx.jpg
+    // 3. assets/ + filepath（去掉前导斜杠），支持 /media/a/xxx.jpg -> assets/media/a/xxx.jpg
     {
         std::string relPath = filepath;
-        // 去掉前导斜杠
         while (!relPath.empty() && (relPath[0] == '/' || relPath[0] == '\\')) {
             relPath = relPath.substr(1);
         }
@@ -671,7 +691,7 @@ std::string ShaderProject::ResolveTexturePath(const std::string& filepath,
         }
     }
 
-    // 3. assets/ + 文件名
+    // 4. assets/ + 文件名
     {
         std::string assetsPath = "assets/" + filename;
         if (fs::exists(assetsPath, std::error_code{})) {
@@ -679,12 +699,12 @@ std::string ShaderProject::ResolveTexturePath(const std::string& filepath,
         }
     }
 
-    // 4. 原始路径直接尝试
+    // 5. 原始路径直接尝试
     if (fs::exists(filepath, std::error_code{})) {
         return filepath;
     }
 
-    // 5. 保留原始路径 + warning
+    // 6. 保留原始路径 + warning
     std::cerr << "Warning: texture not found locally: " << filepath << std::endl;
     return filepath;
 }
