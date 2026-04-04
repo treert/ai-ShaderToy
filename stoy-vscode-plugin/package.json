@@ -62,7 +62,40 @@
                     "meta.embedded.block.hlsl.stoy": "hlsl"
                 }
             }
-        ]
+        ],
+        "semanticTokenScopes": [
+            {
+                "language": "stoy",
+                "scopes": {
+                    "variable.readonly.defaultLibrary": [
+                        "support.variable"
+                    ]
+                }
+            }
+        ],
+        "configurationDefaults": {
+            "[*Dark*]": {
+                "editor.semanticTokenColorCustomizations": {
+                    "rules": {
+                        "variable.readonly.defaultLibrary:stoy": "#4FC1FF"
+                    }
+                }
+            },
+            "[*Light*]": {
+                "editor.semanticTokenColorCustomizations": {
+                    "rules": {
+                        "variable.readonly.defaultLibrary:stoy": "#0070C1"
+                    }
+                }
+            },
+            "[*High Contrast*]": {
+                "editor.semanticTokenColorCustomizations": {
+                    "rules": {
+                        "variable.readonly.defaultLibrary:stoy": "#4FC1FF"
+                    }
+                }
+            }
+        }
     },
     "scripts": {
         "build": "node esbuild.js",

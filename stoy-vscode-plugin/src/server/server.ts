@@ -14,8 +14,8 @@ import {
     HoverParams,
     DefinitionParams,
     DocumentSymbolParams,
+    SemanticTokensParams,
 } from 'vscode-languageserver/node';
-
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { DocumentManager } from './documentManager';
 import { provideDslCompletions } from './dslCompletionProvider';
@@ -26,6 +26,7 @@ import { provideHlslHover } from './hlslHoverProvider';
 import { provideHlslCompletions } from './hlslCompletionProvider';
 import { provideHlslDefinition } from './hlslDefinitionProvider';
 import { provideDocumentSymbols } from './documentSymbolProvider';
+import { provideSemanticTokens, semanticTokensLegend } from './semanticTokenProvider';
 import { StoyDocument } from '../types';
 import { scanHlslSymbols, HlslSymbol } from '../hlslSymbolScanner';
 
@@ -55,6 +56,10 @@ connection.onInitialize((_params: InitializeParams): InitializeResult => {
             hoverProvider: true,
             definitionProvider: true,
             documentSymbolProvider: true,
+            semanticTokensProvider: {
+                legend: semanticTokensLegend,
+                full: true,
+            },
         },
     };
 });
@@ -142,6 +147,16 @@ connection.onDocumentSymbol((params: DocumentSymbolParams) => {
         ?? docManager.getDocument(params.textDocument.uri, textDoc.getText());
     const symbols = symbolCache.get(params.textDocument.uri) ?? [];
     return provideDocumentSymbols(doc, symbols);
+});
+
+// ---- Semantic Tokens ----
+
+connection.onRequest('textDocument/semanticTokens/full', (params: SemanticTokensParams) => {
+    const textDoc = documents.get(params.textDocument.uri);
+    if (!textDoc) return { data: [] };
+
+    const doc = docManager.getDocument(params.textDocument.uri, textDoc.getText());
+    return provideSemanticTokens(doc, textDoc);
 });
 
 // ---- 启动 ----
