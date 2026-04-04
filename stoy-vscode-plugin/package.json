@@ -2,12 +2,12 @@
     "name": "stoy-language",
     "displayName": "Stoy Shader Language",
     "description": "Language support for .stoy shader description files — syntax highlighting, auto-completion, hover, go-to-definition, diagnostics, and HLSL intelligence via request forwarding",
-    "version": "2.0.0",
+    "version": "2.0.1",
     "publisher": "onemore",
     "license": "MIT",
     "repository": {
         "type": "git",
-        "url": "https://github.com/onemore/ai-ShaderToy"
+        "url": "https://github.com/treert/ai-ShaderToy"
     },
     "engines": {
         "vscode": "^1.75.0"
