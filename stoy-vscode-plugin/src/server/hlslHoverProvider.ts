@@ -6,7 +6,7 @@
 import { Hover, MarkupKind, Position } from 'vscode-languageserver';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { StoyDocument, BUILTIN_VARS } from '../types';
-import { findHlslFunction, findHlslType } from '../hlslBuiltins';
+import { findHlslFunction, findHlslType, getHlslDocUrl, getHlslTypeDocUrl } from '../hlslBuiltins';
 import { HlslSymbol, scanHlslSymbols, getVisibleSymbols } from '../hlslSymbolScanner';
 import { getWordAtPosition } from './utils';
 
@@ -24,16 +24,20 @@ export function provideHlslHover(
     if (func) {
         let md = `\`\`\`hlsl\n${func.signature}\n\`\`\`\n\n${func.description}`;
         if (func.params) md += `\n\n**Parameters:**\n\n${func.params}`;
+        md += `\n\n[📖 HLSL Reference](${getHlslDocUrl(func)})`;
         return { contents: { kind: MarkupKind.Markdown, value: md } };
     }
 
     // 2. HLSL 内置类型（L0）
     const type = findHlslType(word);
     if (type) {
+        let md = `\`\`\`hlsl\n${type.name}\n\`\`\`\n\n${type.description}`;
+        const typeUrl = getHlslTypeDocUrl(type);
+        if (typeUrl) md += `\n\n[📖 HLSL Reference](${typeUrl})`;
         return {
             contents: {
                 kind: MarkupKind.Markdown,
-                value: `\`\`\`hlsl\n${type.name}\n\`\`\`\n\n${type.description}`,
+                value: md,
             },
         };
     }

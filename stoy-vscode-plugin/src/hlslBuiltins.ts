@@ -7,51 +7,55 @@ export interface HlslBuiltinFunc {
     signature: string;
     description: string;
     params?: string;
+    /** 覆盖默认 URL 规则的自定义文档链接（不含 base URL） */
+    docSlug?: string;
 }
 
 export interface HlslBuiltinType {
     name: string;
     description: string;
+    /** 文档 URL slug（不含 base URL） */
+    docSlug?: string;
 }
 
 export const HLSL_TYPES: HlslBuiltinType[] = [
     // Scalar
-    { name: 'bool', description: 'Boolean (true/false)' },
-    { name: 'int', description: '32-bit signed integer' },
-    { name: 'uint', description: '32-bit unsigned integer' },
-    { name: 'float', description: '32-bit floating point' },
-    { name: 'half', description: '16-bit floating point' },
-    { name: 'double', description: '64-bit floating point' },
+    { name: 'bool', description: 'Boolean (true/false)', docSlug: 'dx-graphics-hlsl-scalar' },
+    { name: 'int', description: '32-bit signed integer', docSlug: 'dx-graphics-hlsl-scalar' },
+    { name: 'uint', description: '32-bit unsigned integer', docSlug: 'dx-graphics-hlsl-scalar' },
+    { name: 'float', description: '32-bit floating point', docSlug: 'dx-graphics-hlsl-scalar' },
+    { name: 'half', description: '16-bit floating point', docSlug: 'dx-graphics-hlsl-scalar' },
+    { name: 'double', description: '64-bit floating point', docSlug: 'dx-graphics-hlsl-scalar' },
     { name: 'void', description: 'No return value' },
     // Vector
-    { name: 'float2', description: '2-component float vector' },
-    { name: 'float3', description: '3-component float vector' },
-    { name: 'float4', description: '4-component float vector' },
-    { name: 'int2', description: '2-component int vector' },
-    { name: 'int3', description: '3-component int vector' },
-    { name: 'int4', description: '4-component int vector' },
-    { name: 'uint2', description: '2-component uint vector' },
-    { name: 'uint3', description: '3-component uint vector' },
-    { name: 'uint4', description: '4-component uint vector' },
-    { name: 'bool2', description: '2-component bool vector' },
-    { name: 'bool3', description: '3-component bool vector' },
-    { name: 'bool4', description: '4-component bool vector' },
-    { name: 'half2', description: '2-component half vector' },
-    { name: 'half3', description: '3-component half vector' },
-    { name: 'half4', description: '4-component half vector' },
+    { name: 'float2', description: '2-component float vector', docSlug: 'dx-graphics-hlsl-vector' },
+    { name: 'float3', description: '3-component float vector', docSlug: 'dx-graphics-hlsl-vector' },
+    { name: 'float4', description: '4-component float vector', docSlug: 'dx-graphics-hlsl-vector' },
+    { name: 'int2', description: '2-component int vector', docSlug: 'dx-graphics-hlsl-vector' },
+    { name: 'int3', description: '3-component int vector', docSlug: 'dx-graphics-hlsl-vector' },
+    { name: 'int4', description: '4-component int vector', docSlug: 'dx-graphics-hlsl-vector' },
+    { name: 'uint2', description: '2-component uint vector', docSlug: 'dx-graphics-hlsl-vector' },
+    { name: 'uint3', description: '3-component uint vector', docSlug: 'dx-graphics-hlsl-vector' },
+    { name: 'uint4', description: '4-component uint vector', docSlug: 'dx-graphics-hlsl-vector' },
+    { name: 'bool2', description: '2-component bool vector', docSlug: 'dx-graphics-hlsl-vector' },
+    { name: 'bool3', description: '3-component bool vector', docSlug: 'dx-graphics-hlsl-vector' },
+    { name: 'bool4', description: '4-component bool vector', docSlug: 'dx-graphics-hlsl-vector' },
+    { name: 'half2', description: '2-component half vector', docSlug: 'dx-graphics-hlsl-vector' },
+    { name: 'half3', description: '3-component half vector', docSlug: 'dx-graphics-hlsl-vector' },
+    { name: 'half4', description: '4-component half vector', docSlug: 'dx-graphics-hlsl-vector' },
     // Matrix
-    { name: 'float2x2', description: '2×2 float matrix' },
-    { name: 'float3x3', description: '3×3 float matrix' },
-    { name: 'float4x4', description: '4×4 float matrix' },
-    { name: 'float3x4', description: '3×4 float matrix' },
-    { name: 'float4x3', description: '4×3 float matrix' },
+    { name: 'float2x2', description: '2×2 float matrix', docSlug: 'dx-graphics-hlsl-matrix' },
+    { name: 'float3x3', description: '3×3 float matrix', docSlug: 'dx-graphics-hlsl-matrix' },
+    { name: 'float4x4', description: '4×4 float matrix', docSlug: 'dx-graphics-hlsl-matrix' },
+    { name: 'float3x4', description: '3×4 float matrix', docSlug: 'dx-graphics-hlsl-matrix' },
+    { name: 'float4x3', description: '4×3 float matrix', docSlug: 'dx-graphics-hlsl-matrix' },
     // Texture / Sampler
-    { name: 'Texture2D', description: '2D texture resource' },
-    { name: 'Texture3D', description: '3D texture resource' },
-    { name: 'TextureCube', description: 'Cube texture resource' },
-    { name: 'Texture2DArray', description: '2D texture array resource' },
-    { name: 'SamplerState', description: 'Texture sampler state' },
-    { name: 'SamplerComparisonState', description: 'Comparison sampler state' },
+    { name: 'Texture2D', description: '2D texture resource', docSlug: 'sm5-object-texture2d' },
+    { name: 'Texture3D', description: '3D texture resource', docSlug: 'sm5-object-texture3d' },
+    { name: 'TextureCube', description: 'Cube texture resource', docSlug: 'texturecube' },
+    { name: 'Texture2DArray', description: '2D texture array resource', docSlug: 'sm5-object-texture2darray' },
+    { name: 'SamplerState', description: 'Texture sampler state', docSlug: 'dx-graphics-hlsl-sampler' },
+    { name: 'SamplerComparisonState', description: 'Comparison sampler state', docSlug: 'dx-graphics-hlsl-sampler' },
 ];
 
 export const HLSL_FUNCTIONS: HlslBuiltinFunc[] = [
@@ -107,10 +111,10 @@ export const HLSL_FUNCTIONS: HlslBuiltinFunc[] = [
     // Matrix
     { name: 'mul', signature: 'T mul(T a, T b)', description: 'Matrix/vector multiplication.' },
     { name: 'transpose', signature: 'floatNxM transpose(floatMxN m)', description: 'Returns the transpose of a matrix.' },
-    { name: 'determinant', signature: 'float determinant(floatNxN m)', description: 'Returns the determinant of a square matrix.' },
+    { name: 'determinant', signature: 'float determinant(floatNxN m)', description: 'Returns the determinant of a square matrix.', docSlug: 'determinant' },
     // Misc math
-    { name: 'mad', signature: 'T mad(T a, T b, T c)', description: 'Returns a × b + c (fused multiply-add).' },
-    { name: 'rcp', signature: 'T rcp(T x)', description: 'Returns 1/x (reciprocal).' },
+    { name: 'mad', signature: 'T mad(T a, T b, T c)', description: 'Returns a × b + c (fused multiply-add).', docSlug: 'mad' },
+    { name: 'rcp', signature: 'T rcp(T x)', description: 'Returns 1/x (reciprocal).', docSlug: 'rcp' },
     { name: 'degrees', signature: 'T degrees(T radians)', description: 'Converts radians to degrees.' },
     { name: 'radians', signature: 'T radians(T degrees)', description: 'Converts degrees to radians.' },
     // Derivative
@@ -124,12 +128,12 @@ export const HLSL_FUNCTIONS: HlslBuiltinFunc[] = [
     { name: 'isinf', signature: 'bool isinf(T x)', description: 'Returns true if x is infinite.' },
     { name: 'isnan', signature: 'bool isnan(T x)', description: 'Returns true if x is NaN.' },
     // Texture methods
-    { name: 'Sample', signature: 'float4 tex.Sample(SamplerState s, float2 uv)', description: 'Samples a texture at the given UV coordinates.', params: '`s` — sampler state\n\n`uv` — texture coordinates' },
-    { name: 'SampleLevel', signature: 'float4 tex.SampleLevel(SamplerState s, float2 uv, float lod)', description: 'Samples a texture at a specific mip level.' },
-    { name: 'SampleGrad', signature: 'float4 tex.SampleGrad(SamplerState s, float2 uv, float2 ddx, float2 ddy)', description: 'Samples a texture with explicit gradients.' },
-    { name: 'SampleCmp', signature: 'float tex.SampleCmp(SamplerComparisonState s, float2 uv, float cmpVal)', description: 'Samples and compares (shadow mapping).' },
-    { name: 'Load', signature: 'float4 tex.Load(int3 location)', description: 'Reads a texel directly by integer coordinates (x, y, mipLevel).' },
-    { name: 'GetDimensions', signature: 'void tex.GetDimensions(out uint w, out uint h)', description: 'Returns the texture dimensions.' },
+    { name: 'Sample', signature: 'float4 tex.Sample(SamplerState s, float2 uv)', description: 'Samples a texture at the given UV coordinates.', params: '`s` — sampler state\n\n`uv` — texture coordinates', docSlug: 'dx-graphics-hlsl-to-sample' },
+    { name: 'SampleLevel', signature: 'float4 tex.SampleLevel(SamplerState s, float2 uv, float lod)', description: 'Samples a texture at a specific mip level.', docSlug: 'dx-graphics-hlsl-to-samplelevel' },
+    { name: 'SampleGrad', signature: 'float4 tex.SampleGrad(SamplerState s, float2 uv, float2 ddx, float2 ddy)', description: 'Samples a texture with explicit gradients.', docSlug: 'dx-graphics-hlsl-to-samplegrad' },
+    { name: 'SampleCmp', signature: 'float tex.SampleCmp(SamplerComparisonState s, float2 uv, float cmpVal)', description: 'Samples and compares (shadow mapping).', docSlug: 'dx-graphics-hlsl-to-samplecmp' },
+    { name: 'Load', signature: 'float4 tex.Load(int3 location)', description: 'Reads a texel directly by integer coordinates (x, y, mipLevel).', docSlug: 'dx-graphics-hlsl-to-load' },
+    { name: 'GetDimensions', signature: 'void tex.GetDimensions(out uint w, out uint h)', description: 'Returns the texture dimensions.', docSlug: 'dx-graphics-hlsl-to-getdimensions' },
 ];
 
 // ---- 快速查找表 ----
@@ -146,4 +150,26 @@ export function findHlslFunction(name: string): HlslBuiltinFunc | undefined {
 
 export function findHlslType(name: string): HlslBuiltinType | undefined {
     return _typeMap.get(name);
+}
+
+// ---- 文档 URL 生成 ----
+
+const HLSL_DOC_BASE = 'https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl';
+
+/**
+ * 获取内置函数的微软官方文档 URL。
+ * 默认规则：dx-graphics-hlsl-<name>；少数例外通过 docSlug 覆盖。
+ */
+export function getHlslDocUrl(func: HlslBuiltinFunc): string {
+    const slug = func.docSlug ?? `dx-graphics-hlsl-${func.name.toLowerCase()}`;
+    return `${HLSL_DOC_BASE}/${slug}`;
+}
+
+/**
+ * 获取内置类型的微软官方文档 URL。
+ * 没有 docSlug 的类型（如 void）返回 undefined。
+ */
+export function getHlslTypeDocUrl(type: HlslBuiltinType): string | undefined {
+    if (!type.docSlug) return undefined;
+    return `${HLSL_DOC_BASE}/${type.docSlug}`;
 }
