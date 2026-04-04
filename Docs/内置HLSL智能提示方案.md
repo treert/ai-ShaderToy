@@ -112,6 +112,16 @@ Server (server.ts)
 
 texture 和 pass 的派生变量支持 hover + completion + go-to-definition（跳到 DSL 层的声明位置）。
 
+### 特殊支持：pass 入口函数
+
+`mainImage` 作为 pass 的必需入口函数，拥有专门的 hover 提示：
+
+| 位置 | hover 内容 |
+|------|-----------|
+| HLSL 中 `mainImage` | 完整签名 `void mainImage(inout float4 fragColor, float2 fragCoord)` + 入口函数说明 + 当前所在 pass 名称和类型（Buffer/Image output） |
+| DSL 中 `pass` 关键字 | 说明必须实现 `mainImage` 入口函数 |
+| DSL 中 `code` 关键字 | 说明必须实现 `mainImage` 入口函数 |
+
 ### 符号缓存
 
 - 每次文档变更时**立即**解析 + 扫描符号（保证 hover/completion 使用最新数据）

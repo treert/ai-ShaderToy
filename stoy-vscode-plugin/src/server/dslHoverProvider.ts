@@ -77,7 +77,7 @@ const KEYWORD_DOCS: Record<string, string> = {
     'inner_vars': '**inner_vars** `{ ... }`\n\n声明需要的框架内置变量。只有声明了的变量才会在 HLSL 中可用。\n\n可选块，最多一个。',
     'texture': '**texture** `Name = "path" { ... }`\n\n声明外部纹理资源。自动注入 `Name`, `Name_Sampler`, `Name_TexelSize` 到所有 pass。',
     'common': '**common** `[=[ ... ]=]`\n\n共享 HLSL 代码块，会被注入到每个 pass 的代码之前。\n\n可选，最多一个。',
-    'pass': '**pass** `Name { ... }`\n\n渲染通道。至少需要一个 pass。\n\n最后一个 pass 作为最终输出（Image pass）。\n\n必须包含 `code [=[ ... ]=]` 块。',
+    'pass': '**pass** `Name { ... }`\n\n渲染通道。至少需要一个 pass。最后一个 pass 作为最终输出（Image pass）。\n\n必须包含 `code [=[ ... ]=]` 块，代码中必须实现入口函数：\n```hlsl\nvoid mainImage(inout float4 fragColor, float2 fragCoord)\n```',
     'init': '**init** `= float4(r, g, b, a)` | `= texture "path"`\n\n设置 pass 双缓冲纹理的初始值。\n\n默认: `float4(0, 0, 0, 0)` 全黑透明。',
     'code': '**code** `[=[ ... ]=]`\n\nHLSL 代码块。必须实现 `void mainImage(inout float4 fragColor, float2 fragCoord)` 函数。',
 };

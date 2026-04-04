@@ -134,7 +134,7 @@
   - [x] 内置 HLSL 智能提示（不依赖外部扩展）
     - [x] HLSL 内置知识库（60+ 函数签名 + 30+ 类型，hlslBuiltins.ts）
     - [x] HLSL 符号扫描器（正则提取用户函数/struct/变量/宏/函数参数，hlslSymbolScanner.ts）
-    - [x] HLSL hover（内置函数/类型 + 框架变量 + texture/pass 派生变量 + 用户符号）
+    - [x] HLSL hover（内置函数/类型 + 框架变量 + texture/pass 派生变量 + 用户符号 + mainImage 入口函数）
     - [x] HLSL hover 内置函数文档链接（点击跳转微软官方 HLSL Reference）
     - [x] HLSL completion（全部上述 + HLSL 关键字 + struct 成员）
     - [x] HLSL go-to-definition（用户符号 + texture/pass/inner_vars 跳转）

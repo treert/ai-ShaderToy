@@ -115,7 +115,29 @@ export function provideHlslHover(
         }
     }
 
-    // 6. 用户定义的符号（L1）
+    // 6. pass 入口函数 mainImage（特殊标识）
+    if (word === 'mainImage') {
+        // 判断当前在哪个 pass 中
+        let currentPassName: string | undefined;
+        let isImagePass = false;
+        for (const pass of doc.passes) {
+            if (pass.codeRange.startLine > 0 &&
+                position.line >= pass.codeRange.startLine && position.line <= pass.codeRange.endLine) {
+                currentPassName = pass.name;
+                isImagePass = pass.declOrder === doc.passes.length - 1;
+                break;
+            }
+        }
+        let md = `\`\`\`hlsl\nvoid mainImage(inout float4 fragColor, float2 fragCoord)\n\`\`\`\n\n`;
+        md += `**Pass 入口函数** — 每个 pass 的 code 块中必须实现此函数。\n\n`;
+        md += `框架会为每个像素调用此函数，通过 \`fragColor\` 输出颜色，\`fragCoord\` 为当前像素坐标。`;
+        if (currentPassName) {
+            md += `\n\n*当前所在 pass: \`${currentPassName}\`${isImagePass ? ' (Image output)' : ' (Buffer)'}*`;
+        }
+        return { contents: { kind: MarkupKind.Markdown, value: md } };
+    }
+
+    // 7. 用户定义的符号（L1）
     const visible = getVisibleSymbols(symbols, doc, position.line);
     const userSym = visible.find(s => s.name === word);
     if (userSym) {
