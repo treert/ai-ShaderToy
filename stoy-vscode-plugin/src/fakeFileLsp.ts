@@ -1,7 +1,8 @@
 // ============================================================
 // Fake File LSP Manager — fake_file_lsp mode core module
 // Manages a second LanguageClient connecting to shader-language-server
-// via fake file:// URIs for HLSL intelligence (diagnostics, hover, etc.)
+// via fake file:// URIs for HLSL diagnostics (DXC compile errors).
+// All hover/completion/definition are handled by builtin providers.
 // ============================================================
 
 import * as path from 'path';
@@ -14,12 +15,11 @@ import {
     TransportKind,
     Executable,
 } from 'vscode-languageclient/node';
-import * as lsp from 'vscode-languageserver-protocol';
 import { StoyParser } from './stoyParser';
 import { StoyDocument, BlockRange } from './types';
 import { generatePassVirtualDoc, generateCommonVirtualDoc, HlslVirtualDoc } from './hlslGenerator';
-import { FakeUriManager, FakeUriInfo } from './fakeUriManager';
-import { physicalToVirtual, virtualToPhysical, isInBlockRange } from './positionMapper';
+import { FakeUriManager } from './fakeUriManager';
+import { virtualToPhysical } from './positionMapper';
 import { Logger } from './logger';
 
 /** Per-block tracking info for fake documents */
@@ -39,7 +39,9 @@ interface FakeDocState {
  * - Find and start shader-language-server binary
  * - Sync fake HLSL documents via didOpen/didChange/didClose
  * - Intercept diagnostics and map line numbers back to .stoy physical file
- * - Provide position mapping helpers for middleware (hover/completion/definition)
+ *
+ * Note: All hover/completion/definition are handled by builtin providers.
+ * SLS only provides diagnostics (DXC compile errors).
  */
 export class FakeFileLspManager {
     private client: LanguageClient | undefined;
@@ -487,218 +489,10 @@ export class FakeFileLspManager {
         this.diagnosticCollection.set(vscode.Uri.parse(stoyUri), allDiags);
     }
 
-    // ============================================================
-    // Position mapping helpers (for middleware in extension.ts)
-    // ============================================================
-
-    /**
-     * Find which HLSL block the cursor is in and return the fake URI + mapped position.
-     * Returns null if cursor is not in an HLSL block.
-     */
-    findHlslBlock(stoyUri: string, line: number, character: number): {
-        fakeUri: string;
-        virtualPosition: vscode.Position;
-        state: FakeDocState;
-    } | null {
-        const doc = this.stoyDocCache.get(stoyUri);
-        if (!doc) return null;
-
-        const states = this.docStates.get(stoyUri);
-        if (!states) return null;
-
-        // Check common block
-        if (doc.common && isInBlockRange(line, character, doc.common.codeRange)) {
-            const fakeUri = this.uriManager.buildFakeUri(stoyUri, 'common', '_common_');
-            const state = states.get(fakeUri);
-            if (!state) return null;
-            const virtualLine = physicalToVirtual(line, state.blockRange, state.prefixLineCount);
-            if (virtualLine < 0) return null;
-            return { fakeUri, virtualPosition: new vscode.Position(virtualLine, character), state };
-        }
-
-        // Check pass blocks
-        for (const pass of doc.passes) {
-            if (pass.codeRange.startLine > 0 && isInBlockRange(line, character, pass.codeRange)) {
-                const fakeUri = this.uriManager.buildFakeUri(stoyUri, 'pass', pass.name);
-                const state = states.get(fakeUri);
-                if (!state) return null;
-                const virtualLine = physicalToVirtual(line, state.blockRange, state.prefixLineCount);
-                if (virtualLine < 0) return null;
-                return { fakeUri, virtualPosition: new vscode.Position(virtualLine, character), state };
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Map a virtual document position back to physical .stoy file position.
-     */
-    mapVirtualToPhysical(fakeUri: string, virtualLine: number, virtualCharacter: number): {
-        line: number;
-        character: number;
-    } | null {
-        const info = this.uriManager.parseFakeUri(fakeUri);
-        if (!info) return null;
-
-        const states = this.docStates.get(info.stoyUri);
-        if (!states) return null;
-
-        const state = states.get(fakeUri);
-        if (!state) return null;
-
-        const physicalLine = virtualToPhysical(virtualLine, state.blockRange, state.prefixLineCount);
-        if (physicalLine < 0) return null;
-
-        return { line: physicalLine, character: virtualCharacter };
-    }
-
-    // ============================================================
-    // LSP request forwarding (hover / completion / definition)
-    // ============================================================
-
-    /**
-     * Send textDocument/hover request to shader-language-server.
-     */
-    async sendHoverRequest(fakeUri: string, position: vscode.Position): Promise<vscode.Hover | null> {
-        if (!this.client) return null;
-        this.logger.debug(`[Stoy][hover] sendRequest: uri=${fakeUri}, pos=(${position.line},${position.character})`);
-        try {
-            const result = await this.client.sendRequest(lsp.HoverRequest.type, {
-                textDocument: { uri: fakeUri },
-                position: { line: position.line, character: position.character },
-            });
-            this.logger.debug(`[Stoy][hover] raw result: ${result ? JSON.stringify(result).substring(0, 300) : 'null'}`);
-            if (!result) return null;
-            // Convert LSP Hover → vscode.Hover
-            const contents = Array.isArray(result.contents)
-                ? result.contents.map(c => typeof c === 'string' ? new vscode.MarkdownString(c) : new vscode.MarkdownString(c.value))
-                : typeof result.contents === 'string'
-                    ? [new vscode.MarkdownString(result.contents)]
-                    : [new vscode.MarkdownString((result.contents as { kind?: string; value: string }).value)];
-            const range = result.range
-                ? new vscode.Range(result.range.start.line, result.range.start.character, result.range.end.line, result.range.end.character)
-                : undefined;
-            return new vscode.Hover(contents, range);
-        } catch (err) {
-            this.logger.error(`[Stoy] hover request failed: ${err}`);
-            return null;
-        }
-    }
-
-    /**
-     * Send textDocument/completion request to shader-language-server.
-     */
-    async sendCompletionRequest(
-        fakeUri: string,
-        position: vscode.Position,
-        triggerCharacter?: string,
-    ): Promise<vscode.CompletionList | null> {
-        if (!this.client) return null;
-        this.logger.debug(`[Stoy][completion] sendRequest: uri=${fakeUri}, pos=(${position.line},${position.character}), trigger=${triggerCharacter ?? 'none'}`);
-        try {
-            const result = await this.client.sendRequest(lsp.CompletionRequest.type, {
-                textDocument: { uri: fakeUri },
-                position: { line: position.line, character: position.character },
-                context: {
-                    triggerKind: triggerCharacter
-                        ? lsp.CompletionTriggerKind.TriggerCharacter
-                        : lsp.CompletionTriggerKind.Invoked,
-                    triggerCharacter,
-                },
-            });
-            if (!result) return null;
-            // Convert LSP CompletionItem[] or CompletionList → vscode.CompletionList
-            const items = Array.isArray(result) ? result : result.items;
-            const isIncomplete = Array.isArray(result) ? false : result.isIncomplete;
-            const vsItems = items.map(item => {
-                const ci = new vscode.CompletionItem(item.label, item.kind as number | undefined);
-                ci.detail = item.detail;
-                ci.documentation = item.documentation
-                    ? (typeof item.documentation === 'string'
-                        ? item.documentation
-                        : new vscode.MarkdownString(item.documentation.value))
-                    : undefined;
-                ci.sortText = item.sortText;
-                ci.filterText = item.filterText;
-                ci.insertText = item.insertText;
-                if (item.textEdit && 'range' in item.textEdit) {
-                    const r = item.textEdit.range;
-                    ci.range = new vscode.Range(r.start.line, r.start.character, r.end.line, r.end.character);
-                    ci.insertText = item.textEdit.newText;
-                }
-                return ci;
-            });
-            return new vscode.CompletionList(vsItems, isIncomplete);
-        } catch (err) {
-            this.logger.error(`[Stoy] completion request failed: ${err}`);
-            return null;
-        }
-    }
-
-    /**
-     * Send textDocument/definition request to shader-language-server.
-     */
-    async sendDefinitionRequest(
-        fakeUri: string,
-        position: vscode.Position,
-    ): Promise<vscode.Location[] | null> {
-        if (!this.client) return null;
-        try {
-            const result = await this.client.sendRequest(lsp.DefinitionRequest.type, {
-                textDocument: { uri: fakeUri },
-                position: { line: position.line, character: position.character },
-            });
-            if (!result) return null;
-            // Convert LSP Location(s) → vscode.Location[]
-            const locs = Array.isArray(result) ? result : [result];
-            return locs.map(loc => {
-                if ('targetUri' in loc) {
-                    // LocationLink
-                    const r = loc.targetRange;
-                    return new vscode.Location(
-                        vscode.Uri.parse(loc.targetUri),
-                        new vscode.Range(r.start.line, r.start.character, r.end.line, r.end.character),
-                    );
-                }
-                // Location
-                const r = loc.range;
-                return new vscode.Location(
-                    vscode.Uri.parse(loc.uri),
-                    new vscode.Range(r.start.line, r.start.character, r.end.line, r.end.character),
-                );
-            });
-        } catch (err) {
-            this.logger.error(`[Stoy] definition request failed: ${err}`);
-            return null;
-        }
-    }
-
     /**
      * Check if the manager is ready (second LSP client is running).
      */
     get ready(): boolean {
         return this.isReady;
-    }
-
-    /**
-     * Get the FakeUriManager instance (for external use).
-     */
-    get fakeUris(): FakeUriManager {
-        return this.uriManager;
-    }
-
-    /**
-     * Get the StoyParser instance (for external use).
-     */
-    get stoyParser(): StoyParser {
-        return this.parser;
-    }
-
-    /**
-     * Get cached StoyDocument for a .stoy URI.
-     */
-    getStoyDocument(stoyUri: string): StoyDocument | undefined {
-        return this.stoyDocCache.get(stoyUri);
     }
 }

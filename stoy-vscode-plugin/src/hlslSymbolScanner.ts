@@ -173,12 +173,17 @@ function scanCodeBlock(
                     passName,
                 })),
             });
-            // Skip to struct end to avoid matching members as variables
+            // Skip to struct end to avoid matching members as variables.
+            // Count braces across the entire struct (from declaration to closing line)
+            // so that braceDepth stays balanced after skipping.
             if (structEndIdx >= 0) {
-                // Update brace depth: struct opens and closes
+                for (let k = i; k <= structEndIdx; k++) {
+                    braceDepth += countBraces(lines[k]);
+                }
                 i = structEndIdx;
+            } else {
+                braceDepth += countBraces(line);
             }
-            braceDepth += countBraces(line);
             if (braceDepth <= 0) {
                 braceDepth = 0;
                 enclosingFuncEndLine = undefined;
@@ -461,14 +466,52 @@ function findFuncBodyEnd(lines: string[], startIdx: number): number {
 /**
  * Count net brace depth change for a single line.
  * Returns positive for net opening braces, negative for net closing braces.
- * Note: This is a simple counter that doesn't skip comments/strings for performance,
- * which is acceptable for the symbol scanner's scope tracking purposes.
+ * Skips braces inside // line comments, block comments, string literals,
+ * and character literals to avoid miscounting.
  */
 function countBraces(line: string): number {
     let delta = 0;
-    for (const ch of line) {
+    let i = 0;
+    while (i < line.length) {
+        const ch = line[i];
+        // Skip // line comment — rest of line is comment
+        if (ch === '/' && i + 1 < line.length && line[i + 1] === '/') {
+            break;
+        }
+        // Skip /* block comment */ (within the same line)
+        if (ch === '/' && i + 1 < line.length && line[i + 1] === '*') {
+            const closeIdx = line.indexOf('*/', i + 2);
+            if (closeIdx >= 0) {
+                i = closeIdx + 2;
+            } else {
+                // Block comment extends beyond this line — skip rest
+                break;
+            }
+            continue;
+        }
+        // Skip string literals (double quotes)
+        if (ch === '"') {
+            i++;
+            while (i < line.length && line[i] !== '"') {
+                if (line[i] === '\\') i++; // skip escaped char
+                i++;
+            }
+            i++; // skip closing quote
+            continue;
+        }
+        // Skip character literals (single quotes)
+        if (ch === "'") {
+            i++;
+            while (i < line.length && line[i] !== "'") {
+                if (line[i] === '\\') i++; // skip escaped char
+                i++;
+            }
+            i++; // skip closing quote
+            continue;
+        }
         if (ch === '{') delta++;
         else if (ch === '}') delta--;
+        i++;
     }
     return delta;
 }

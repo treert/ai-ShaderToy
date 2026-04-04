@@ -39,6 +39,8 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
+tmptmp/
+
 # CodeBuddy
 .codebuddy/*
 !.codebuddy/rules/
