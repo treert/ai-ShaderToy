@@ -45,11 +45,15 @@ export function provideHlslHover(
     // 3. 框架内置变量
     const builtin = BUILTIN_VARS.find(v => v.name === word);
     if (builtin) {
+        const declared = doc.innerVars?.vars.includes(builtin.name) ?? false;
+        let md = `\`\`\`hlsl\n${builtin.hlslType} ${builtin.name}\n\`\`\`\n\n${builtin.description}`;
+        if (declared) {
+            md += `\n\n✅ 已在 \`inner_vars\` 中声明`;
+        } else {
+            md += `\n\n⚠️ **未在 \`inner_vars\` 中声明**，使用前需添加`;
+        }
         return {
-            contents: {
-                kind: MarkupKind.Markdown,
-                value: `\`\`\`hlsl\n${builtin.hlslType} ${builtin.name}\n\`\`\`\n\n${builtin.description}`,
-            },
+            contents: { kind: MarkupKind.Markdown, value: md },
         };
     }
 

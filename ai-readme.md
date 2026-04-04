@@ -137,8 +137,11 @@
     - [x] HLSL hover（内置函数/类型 + 框架变量 + texture/pass 派生变量 + 用户符号 + mainImage 入口函数）
     - [x] HLSL hover 内置函数文档链接（点击跳转微软官方 HLSL Reference）
     - [x] HLSL completion（全部上述 + HLSL 关键字 + struct 成员）
+    - [x] HLSL completion 排序优化（框架内置变量优先 + inner_vars 声明状态提示）
     - [x] HLSL go-to-definition（用户符号 + texture/pass/inner_vars 跳转）
+    - [x] HLSL hover 内置变量 inner_vars 声明状态提示
     - [x] 文档大纲 Outline（DSL 顶层块 + HLSL 用户符号层级显示）
+    - [x] Outline inner_vars 显示所有内置变量（已声明正常 / 未声明灰色+标注）
   - [x] Server 端 DSL/HLSL 路由（按光标位置自动切换 provider）
   - [x] 扩展主入口（Language Client + 配置驱动 middleware）
   - [x] HLSL provider 配置切换（`stoy.hlsl.provider` 设置项，builtin/externalLsp 两种模式）
