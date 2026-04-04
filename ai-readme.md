@@ -126,3 +126,12 @@
 - [x] .stoy 示例文件（assets/stoys/minimal.stoy + assets/stoys/feedback_demo.stoy）
 - [x] .stoy 模式架构说明文档（Docs/stoy模式架构说明.md）
 - [x] VSCode 语法高亮插件（stoy-vscode-plugin/，纯声明式 TextMate Grammar，含嵌入式 HLSL 子语法）
+- [x] VSCode Language Server 智能插件（Request Forwarding 架构）
+  - [x] TypeScript 项目初始化（LSP client/server 分离架构，esbuild 打包）
+  - [x] TypeScript .stoy 解析器（从 C++ 移植，手写递归下降，精确行号范围）
+  - [x] HLSL 虚拟文档生成器（8 层结构：cbuffer/别名/纹理/common/code/main 包装）
+  - [x] 位置映射器（物理行号 ↔ 虚拟文档行号双向映射）
+  - [x] DSL 层智能提示（补全/悬停/跳转定义/诊断 4 个 provider）
+  - [x] 虚拟文档系统（TextDocumentContentProvider，按 pass/common 生成虚拟 .hlsl）
+  - [x] HLSL 请求转发（middleware 拦截，executeCommand 转发 completion/hover/definition/references/signatureHelp）
+  - [x] 扩展主入口（Language Client + 虚拟文档注册 + middleware 路由）

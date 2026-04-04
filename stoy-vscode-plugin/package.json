@@ -1,8 +1,8 @@
 {
-    "name": "stoy-syntax",
-    "displayName": "Stoy Shader Format",
-    "description": "Syntax highlighting for .stoy shader description files (ai-ShaderToy project)",
-    "version": "1.0.0",
+    "name": "stoy-language",
+    "displayName": "Stoy Shader Language",
+    "description": "Language support for .stoy shader description files — syntax highlighting, auto-completion, hover, go-to-definition, diagnostics, and HLSL intelligence via request forwarding",
+    "version": "2.0.0",
     "publisher": "onemore",
     "license": "MIT",
     "repository": {
@@ -10,11 +10,15 @@
         "url": "https://github.com/onemore/ai-ShaderToy"
     },
     "engines": {
-        "vscode": "^1.60.0"
+        "vscode": "^1.75.0"
     },
     "categories": [
         "Programming Languages"
     ],
+    "activationEvents": [
+        "onLanguage:stoy"
+    ],
+    "main": "./out/client.js",
     "contributes": {
         "languages": [
             {
@@ -39,5 +43,21 @@
                 }
             }
         ]
+    },
+    "scripts": {
+        "build": "node esbuild.js",
+        "watch": "node esbuild.js --watch",
+        "package": "vsce package"
+    },
+    "devDependencies": {
+        "@types/node": "^18.0.0",
+        "@types/vscode": "^1.75.0",
+        "esbuild": "^0.20.0",
+        "typescript": "^5.3.0"
+    },
+    "dependencies": {
+        "vscode-languageclient": "^9.0.0",
+        "vscode-languageserver": "^9.0.0",
+        "vscode-languageserver-textdocument": "^1.0.0"
     }
 }
