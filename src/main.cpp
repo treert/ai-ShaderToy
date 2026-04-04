@@ -407,6 +407,62 @@ static int TranslateAndDumpHlsl(const ShaderProjectData& data,
     return compileErrors;
 }
 
+/// 将 .stoy 模式生成的 HLSL 输出到指定目录，每个 pass 一个文件，同时用 D3DCompile 验证。
+/// @param stoyHlsl     StoyHlslGenerator 的生成结果
+/// @param outDir       输出目录路径
+/// @param sourcePath   原始 .stoy 文件路径（写入注释头）
+/// @return 编译失败的 pass 数量（0 表示全部通过）
+static int DumpStoyHlsl(const StoyHlslResult& stoyHlsl,
+                        const std::filesystem::path& outDir,
+                        const std::string& sourcePath = "") {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::create_directories(outDir, ec);
+
+    int compileErrors = 0;
+    int numPasses = static_cast<int>(stoyHlsl.passHlsls.size());
+
+    for (int i = 0; i < numPasses; i++) {
+        const auto& ph = stoyHlsl.passHlsls[i];
+        bool isLast = (i == numPasses - 1);
+
+        // 构造注释头
+        std::string header;
+        header += "// Auto-generated HLSL from .stoy format — DO NOT EDIT\n";
+        if (!sourcePath.empty()) {
+            header += "// Source: " + sourcePath + "  [" + ph.passName;
+            if (isLast) header += " (Image output)";
+            header += "]\n";
+        }
+        header += "//\n\n";
+
+        std::string fullHlsl = header + ph.hlslSource;
+
+        // D3DCompile 编译验证
+        std::string compileErrs;
+        bool compileOk = CompileHlslForValidation(fullHlsl, ph.passName, compileErrs);
+
+        if (!compileOk) {
+            fullHlsl += "\n\n// ======== HLSL COMPILE ERROR ========\n/*\n" + compileErrs + "\n*/\n";
+            compileErrors++;
+        }
+
+        // 文件名：pass名.hlsl
+        std::string fileName = ph.passName + ".hlsl";
+        fs::path outPath = outDir / fileName;
+        std::ofstream ofs(outPath, std::ios::out | std::ios::trunc);
+        if (ofs.is_open()) {
+            ofs << fullHlsl;
+            ofs.close();
+        }
+
+        std::cout << "  -> " << outPath.string()
+                  << (compileOk ? "  [OK]" : "  [COMPILE ERROR]") << std::endl;
+    }
+
+    return compileErrors;
+}
+
 int main(int argc, char* argv[]) {
     InitConsole();  // 先附加控制台（让 --help 能输出）
     InitShaderTranslator();  // 初始化 glslang（SPIRV-Cross 管线）
@@ -1375,6 +1431,18 @@ int main(int argc, char* argv[]) {
                 SDL_Quit();
                 return 1;
             }
+
+            // .stoy HLSL dump
+            {
+                namespace fs = std::filesystem;
+                std::string sName = GetShaderDumpName(config.shaderPath);
+                fs::path outDir = GetLogDir() / "stoy-mode" / sName;
+                std::cout << "HLSL dump (stoy-mode): " << config.shaderPath << std::endl;
+                int errors = DumpStoyHlsl(stoyHlsl, outDir, config.shaderPath);
+                if (errors > 0) {
+                    std::cerr << "WARNING: " << errors << " pass(es) had HLSL compile errors." << std::endl;
+                }
+            }
         } else {
             // ---- ShaderToy 模式 ----
             LoadD3D11TexturesForProject(projData);
@@ -1426,15 +1494,28 @@ int main(int argc, char* argv[]) {
     // HLSL 翻译输出 lambda（热加载时复用）
     auto dumpHlsl = [&]() {
 #ifdef _WIN32
-        if (!useD3D11 || config.isStoyMode) return;  // .stoy 不需要 HLSL dump
+        if (!useD3D11) return;
         namespace fs = std::filesystem;
         std::string shaderName = GetShaderDumpName(config.shaderPath);
-        std::string subDir = config.wallpaperMode ? "wallpaper-mode" : "window-mode";
-        fs::path outDir = GetLogDir() / subDir / shaderName;
-        std::cout << "HLSL dump (" << subDir << "): " << config.shaderPath << std::endl;
-        int errors = TranslateAndDumpHlsl(project.GetData(), shaderName, outDir, config.shaderPath);
-        if (errors > 0) {
-            std::cerr << "WARNING: " << errors << " pass(es) had HLSL compile errors." << std::endl;
+
+        if (config.isStoyMode) {
+            // .stoy 模式：输出到 stoy-mode 子目录
+            fs::path outDir = GetLogDir() / "stoy-mode" / shaderName;
+            std::cout << "HLSL dump (stoy-mode): " << config.shaderPath << std::endl;
+            int errors = DumpStoyHlsl(stoyHlsl, outDir, config.shaderPath);
+            if (errors > 0) {
+                std::cerr << "WARNING: " << errors << " pass(es) had HLSL compile errors." << std::endl;
+            }
+        } else {
+            // ShaderToy 模式：翻译 GLSL→HLSL 输出（HLSL 原生模式跳过）
+            if (project.GetData().isHlsl) return;
+            std::string subDir = config.wallpaperMode ? "wallpaper-mode" : "window-mode";
+            fs::path outDir = GetLogDir() / subDir / shaderName;
+            std::cout << "HLSL dump (" << subDir << "): " << config.shaderPath << std::endl;
+            int errors = TranslateAndDumpHlsl(project.GetData(), shaderName, outDir, config.shaderPath);
+            if (errors > 0) {
+                std::cerr << "WARNING: " << errors << " pass(es) had HLSL compile errors." << std::endl;
+            }
         }
 #endif
     };
@@ -2104,6 +2185,7 @@ int main(int argc, char* argv[]) {
                     if (SetupD3D11Stoy()) {
                         lastShaderError.clear();
                         std::cout << ".stoy reloaded successfully." << std::endl;
+                        dumpHlsl();  // HLSL dump（热加载）
                         updateWindowTitle();
                         if (config.wallpaperMode) {
                             tray.SetShaderList(debugState.glslFiles, debugState.jsonFiles,
@@ -2113,6 +2195,7 @@ int main(int argc, char* argv[]) {
                     } else {
                         lastShaderError = d3dMultiPass ? d3dMultiPass->GetLastError() : "D3D11 stoy setup failed";
                         std::cerr << ".stoy reload failed: " << lastShaderError << std::endl;
+                        dumpHlsl();  // 编译失败也输出 HLSL，方便调试
                     }
 #endif
                 } else {

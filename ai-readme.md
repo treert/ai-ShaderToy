@@ -125,6 +125,7 @@
 - [x] .stoy 独立模式分支（不经过 ShaderProject，走 StoyParser → StoyHlslGenerator → D3D11MultiPass 独立路径）
 - [x] .stoy 示例文件（assets/stoys/minimal.stoy + assets/stoys/feedback_demo.stoy）
 - [x] .stoy 模式架构说明文档（Docs/stoy模式架构说明.md）
+- [x] .stoy 模式 HLSL dump（初始加载+热加载后输出到 Logs/stoy-mode/，每个 pass 一个 .hlsl，D3DCompile 编译验证）
 - [x] VSCode 语法高亮插件（stoy-vscode-plugin/，纯声明式 TextMate Grammar，含嵌入式 HLSL 子语法）
 - [x] VSCode Language Server 智能插件
   - [x] TypeScript 项目初始化（LSP client/server 分离架构，esbuild 打包）
