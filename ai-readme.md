@@ -150,4 +150,5 @@
     - [x] extension.ts middleware（externalLsp 模式注册虚拟文档 + 拦截转发 HLSL 请求）
     - [x] 配置变更提示重载窗口
   - 虚拟文档 + 外部扩展转发方案（externalLsp 模式可选启用，详见 Docs/虚拟文档转发方案记录.md）
+  - [x] Parser 容错解析（panic mode recovery，错误不中断后续块解析，Outline/补全/hover 不因单个错误丢失信息）
   - 待实施方案：内嵌 shader-language-server（DXC 实时诊断 + tree-sitter AST，HLSL 层全面替代内置正则方案，详见 Docs/shader-language-server内嵌方案.md）

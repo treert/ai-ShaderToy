@@ -80,7 +80,11 @@ export class DocumentManager {
     }
 }
 
-/** 判断解析结果是否有有效结构（至少有一个 pass 或 common） */
+/** 判断解析结果是否有有效结构（至少有一个有意义的块） */
 function isStructurallyValid(doc: StoyDocument): boolean {
-    return doc.passes.length > 0 || doc.common !== undefined;
+    return doc.passes.length > 0
+        || doc.common !== undefined
+        || doc.innerVars !== undefined
+        || doc.textures.length > 0
+        || doc.globalSetting !== undefined;
 }
