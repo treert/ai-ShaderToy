@@ -148,7 +148,7 @@
 
         "hlsl-stoy-builtins": {
             "match": "\\b(iResolution|iTime|iTimeDelta|iFrame|iFrameRate|iMouse|iDate|iSampleRate)\\b",
-            "name": "variable.language.builtin.stoy"
+            "name": "entity.name.variable.stoy"
         }
     }
 }

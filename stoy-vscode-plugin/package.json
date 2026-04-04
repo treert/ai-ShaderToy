@@ -3,7 +3,12 @@
     "displayName": "Stoy Shader Format",
     "description": "Syntax highlighting for .stoy shader description files (ai-ShaderToy project)",
     "version": "1.0.0",
-    "publisher": "ai-shadertoy",
+    "publisher": "onemore",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/onemore/ai-ShaderToy"
+    },
     "engines": {
         "vscode": "^1.60.0"
     },
