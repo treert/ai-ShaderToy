@@ -1848,6 +1848,12 @@ int main(int argc, char* argv[]) {
     Uint32 fullscreenCheckTimer = 0;  // 全屏检测计时
     bool autoPaused = false;          // 因全屏应用而自动暂停
 
+    // Pause-time compensation: track when pause started so we can advance startTime on resume,
+    // making iTime continue seamlessly from where it was paused.
+    Uint64 pauseStartCounter = 0;     // Performance counter when pause began
+    bool wasAutoPaused = false;       // Track autoPaused state transitions
+    bool wasAllOccluded = false;      // Track allOccluded state transitions
+
     // FPS 统计（滑动帧计数法：累计 N 帧后更新，低帧率时也稳定）
     float measuredFPS = 0.0f;
     int fpsFrameCount = 0;
@@ -1862,6 +1868,31 @@ int main(int argc, char* argv[]) {
     float mouse[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     bool mousePressed = false;
     double clickTime = -10.0;  // 最近一次点击的 iTime，初始设为远过去
+
+    // Helper: compensate startTime, lastFrameTime, and clickTime after a pause ends.
+    // Call this when transitioning from any paused state back to running.
+    auto compensatePauseTime = [&]() {
+        if (pauseStartCounter == 0) return;
+        Uint64 pauseEnd = SDL_GetPerformanceCounter();
+        Uint64 pauseDuration = pauseEnd - pauseStartCounter;
+        double pauseDurationSec = static_cast<double>(pauseDuration) / static_cast<double>(freq);
+        startTime += pauseDuration;
+        // After compensation, currentTime will equal the value at pause time.
+        // Set lastFrameTime so the resume frame gets timeDelta ≈ 0.016s (not zero, not huge).
+        double pauseTimeSec = static_cast<double>(pauseStartCounter - (startTime - pauseDuration)) / static_cast<double>(freq);
+        lastFrameTime = std::max(0.0, pauseTimeSec - 0.016);
+        // Compensate clickTime: since startTime moved forward, existing clickTime values
+        // (computed as (clickNow - oldStartTime)/freq) are now too large by pauseDurationSec.
+        if (clickTime > 0.0) {
+            clickTime -= pauseDurationSec;
+        }
+        for (auto& ww : wallpaperWindows) {
+            if (ww.clickTime > 0.0) {
+                ww.clickTime -= pauseDurationSec;
+            }
+        }
+        pauseStartCounter = 0;
+    };
 
     // 统一填充 debugState 的公共字段
     auto fillDebugState = [&](float fps, float time, float td, float rt,
@@ -2054,6 +2085,11 @@ int main(int argc, char* argv[]) {
                 startTime = SDL_GetPerformanceCounter();
                 frameCount = 0;
                 lastFrameTime = 0.0;
+                // If currently paused, reset pauseStartCounter so that resume compensation
+                // only accounts for time after this reset, not the entire pause duration.
+                if (paused && pauseStartCounter > 0) {
+                    pauseStartCounter = SDL_GetPerformanceCounter();
+                }
                 debugState.requestResetTime = false;
             }
             // 暂停状态同步（DebugUI → paused）
@@ -2291,6 +2327,10 @@ int main(int argc, char* argv[]) {
 
         // 暂停时跳过 shader 渲染，使用缓存的 snapshot 保持画面稳定
         if (paused) {
+            // Record the moment we enter pause (first frame only)
+            if (!wasPaused) {
+                pauseStartCounter = SDL_GetPerformanceCounter();
+            }
             wasPaused = true;
 
             if (!config.wallpaperMode) {
@@ -2398,9 +2438,11 @@ int main(int argc, char* argv[]) {
             continue;
         }
 
-        // Detect resume from pause: invalidate snapshot
+        // Detect resume from pause: compensate startTime and invalidate snapshot
         if (wasPaused) {
             wasPaused = false;
+            compensatePauseTime();
+
 #ifdef _WIN32
             if (useD3D11 && d3dRenderer) {
                 if (config.wallpaperMode) {
@@ -2426,9 +2468,16 @@ int main(int argc, char* argv[]) {
                 bool fullscreen = IsFullscreenAppRunning();
                 if (fullscreen && !autoPaused) {
                     autoPaused = true;
+                    wasAutoPaused = true;
+                    pauseStartCounter = SDL_GetPerformanceCounter();
                     std::cout << "Fullscreen app detected, auto-pausing." << std::endl;
                 } else if (!fullscreen && autoPaused) {
                     autoPaused = false;
+                    // Compensate startTime for the pause duration
+                    if (wasAutoPaused) {
+                        compensatePauseTime();
+                        wasAutoPaused = false;
+                    }
                     std::cout << "Fullscreen app closed, resuming." << std::endl;
                 }
 
@@ -2468,6 +2517,11 @@ int main(int argc, char* argv[]) {
         }
 
         double timeDelta = currentTime - lastFrameTime;
+        // Safety clamp: ensure timeDelta is never zero or excessively large (e.g. after resume).
+        // This protects shaders that divide by iTimeDelta or use it for physics stepping.
+        if (timeDelta > 1.0 || timeDelta <= 0.0) {
+            timeDelta = 0.016;
+        }
         lastFrameTime = currentTime;
 
         // FPS 统计：累计足够帧数后更新（高帧率约1秒更新，低帧率每3帧更新）
@@ -2501,8 +2555,26 @@ int main(int argc, char* argv[]) {
                 std::all_of(wallpaperWindows.begin(), wallpaperWindows.end(),
                             [](const WallpaperWindow& ww) { return ww.occluded; });
             if (allOccluded) {
+                // Record the moment we enter allOccluded pause (first frame only)
+                if (!wasAllOccluded) {
+                    wasAllOccluded = true;
+                    pauseStartCounter = SDL_GetPerformanceCounter();
+                }
                 SDL_Delay(100);
                 continue;
+            }
+            // Compensate time when exiting allOccluded state
+            if (wasAllOccluded) {
+                wasAllOccluded = false;
+                compensatePauseTime();
+                // Recalculate currentTime and timeDelta after compensation
+                now = SDL_GetPerformanceCounter();
+                currentTime = static_cast<double>(now - startTime) / static_cast<double>(freq);
+                timeDelta = currentTime - lastFrameTime;
+                if (timeDelta > 1.0 || timeDelta <= 0.0) {
+                    timeDelta = 0.016;
+                }
+                lastFrameTime = currentTime;
             }
 
 #ifdef _WIN32
