@@ -560,7 +560,7 @@ int main(int argc, char* argv[]) {
         int x = 0, y = 0;          // 显示器屏幕坐标
         int width = 0, height = 0;
         bool occluded = false;      // 是否被窗口遮挡（遮挡时跳过渲染）
-        float clickTime = -10.0f;   // 该显示器上最近一次点击的 iTime（per-monitor）
+        double clickTime = -10.0;   // 该显示器上最近一次点击的 iTime（per-monitor）
         float clickLocalX = 0.0f;   // 该显示器上最近一次点击的局部坐标 X
         float clickLocalY = 0.0f;   // 该显示器上最近一次点击的局部坐标 Y
         bool clickActive = false;   // 该显示器上是否有活跃的点击（按下状态）
@@ -1839,7 +1839,10 @@ int main(int argc, char* argv[]) {
     // ============================================================
     Uint64 startTime = SDL_GetPerformanceCounter();
     Uint64 freq = SDL_GetPerformanceFrequency();
-    float lastFrameTime = 0.0f;
+    double lastFrameTime = 0.0;
+    // Auto-reset iTime every N seconds to prevent float precision loss in shaders.
+    // Set to 0 to disable. Default: 7200 seconds (2 hours).
+    constexpr double kTimeResetInterval = 7200.0;
     int frameCount = 0;
     Uint32 fullscreenCheckTimer = 0;  // 全屏检测计时
     bool autoPaused = false;          // 因全屏应用而自动暂停
@@ -1857,7 +1860,7 @@ int main(int argc, char* argv[]) {
     // iMouse: xy=当前鼠标位置, zw=按下瞬间的位置（松开后取负值）
     float mouse[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     bool mousePressed = false;
-    float clickTime = -10.0f;  // 最近一次点击的 iTime，初始设为远过去
+    double clickTime = -10.0;  // 最近一次点击的 iTime，初始设为远过去
 
     // 统一填充 debugState 的公共字段
     auto fillDebugState = [&](float fps, float time, float td, float rt,
@@ -1956,7 +1959,7 @@ int main(int argc, char* argv[]) {
                     mouse[3] = mouse[1];
                     // 记录点击时间
                     Uint64 clickNow = SDL_GetPerformanceCounter();
-                    clickTime = static_cast<float>(clickNow - startTime) / static_cast<float>(freq);
+                    clickTime = static_cast<double>(clickNow - startTime) / static_cast<double>(freq);
                 }
                 break;
             case SDL_MOUSEBUTTONUP:
@@ -1985,7 +1988,7 @@ int main(int argc, char* argv[]) {
                 mouse[2] = mouse[0];
                 mouse[3] = mouse[1];
                 Uint64 clickNow = SDL_GetPerformanceCounter();
-                float clickTimeNow = static_cast<float>(clickNow - startTime) / static_cast<float>(freq);
+                double clickTimeNow = static_cast<double>(clickNow - startTime) / static_cast<double>(freq);
                 clickTime = clickTimeNow;  // 全局（Buffer pass 用）
                 // 按显示器归属更新 per-monitor clickTime 和点击局部坐标
                 for (auto& ww : wallpaperWindows) {
@@ -2049,7 +2052,7 @@ int main(int argc, char* argv[]) {
             if (debugState.requestResetTime) {
                 startTime = SDL_GetPerformanceCounter();
                 frameCount = 0;
-                lastFrameTime = 0.0f;
+                lastFrameTime = 0.0;
                 debugState.requestResetTime = false;
             }
             // 暂停状态同步（DebugUI → paused）
@@ -2256,7 +2259,7 @@ int main(int argc, char* argv[]) {
         // 暂停时跳过 shader 渲染，但仍渲染 DebugUI
         if (paused) {
             if (!config.wallpaperMode) {
-                fillDebugState(0.0f, lastFrameTime, 0.0f, 0.0f,
+                fillDebugState(0.0f, static_cast<float>(lastFrameTime), 0.0f, 0.0f,
                                static_cast<float>(config.width),
                                static_cast<float>(config.height), mouse);
 
@@ -2279,7 +2282,7 @@ int main(int argc, char* argv[]) {
 #ifdef _WIN32
                     if (useD3D11 && d3dRenderer) {
                         for (auto& ww : wallpaperWindows) {
-                            fillDebugState(0.0f, lastFrameTime, 0.0f, 0.0f,
+                            fillDebugState(0.0f, static_cast<float>(lastFrameTime), 0.0f, 0.0f,
                                            static_cast<float>(ww.width),
                                            static_cast<float>(ww.height), mouse);
 
@@ -2294,7 +2297,7 @@ int main(int argc, char* argv[]) {
                     {
                         for (auto& ww : wallpaperWindows) {
                             SDL_GL_MakeCurrent(ww.window, glContext);
-                            fillDebugState(0.0f, lastFrameTime, 0.0f, 0.0f,
+                            fillDebugState(0.0f, static_cast<float>(lastFrameTime), 0.0f, 0.0f,
                                            static_cast<float>(ww.width),
                                            static_cast<float>(ww.height), mouse);
 
@@ -2356,8 +2359,22 @@ int main(int argc, char* argv[]) {
 
         // 时间计算
         Uint64 now = SDL_GetPerformanceCounter();
-        float currentTime = static_cast<float>(now - startTime) / static_cast<float>(freq);
-        float timeDelta = currentTime - lastFrameTime;
+        double currentTime = static_cast<double>(now - startTime) / static_cast<double>(freq);
+
+        // Periodically reset startTime to prevent float precision loss when passing iTime to shaders.
+        if (kTimeResetInterval > 0 && currentTime >= kTimeResetInterval) {
+            startTime = now;
+            currentTime = 0.0;
+            // Preserve a nominal frame time so timeDelta stays reasonable on the reset frame
+            // instead of snapping to 0 (which could cause division-by-zero or animation glitches).
+            lastFrameTime = -0.016;
+            clickTime = -10.0;
+            for (auto& ww : wallpaperWindows) {
+                ww.clickTime = -10.0;
+            }
+        }
+
+        double timeDelta = currentTime - lastFrameTime;
         lastFrameTime = currentTime;
 
         // FPS 统计：累计足够帧数后更新（高帧率约1秒更新，低帧率每3帧更新）
@@ -2417,8 +2434,8 @@ int main(int argc, char* argv[]) {
                 // 设置全屏三角形 VS（所有 pass 共享）
                 ctx->VSSetShader(d3dRenderer->GetFullscreenVS(), nullptr, 0);
 
-                d3dMultiPass->RenderBufferPasses(ctx, currentTime, timeDelta, frameCount,
-                                                  bufferMouse, date, bufferW, bufferH, clickTime);
+                d3dMultiPass->RenderBufferPasses(ctx, static_cast<float>(currentTime), static_cast<float>(timeDelta), frameCount,
+                                                  bufferMouse, date, bufferW, bufferH, static_cast<float>(clickTime));
 
                 for (auto& ww : wallpaperWindows) {
                     if (ww.occluded && config.pauseOnFullscreen) continue;
@@ -2441,8 +2458,8 @@ int main(int argc, char* argv[]) {
                         float sMouse[4] = { localMouse[0]*config.renderScale, localMouse[1]*config.renderScale,
                                             localMouse[2]*config.renderScale, localMouse[3]*config.renderScale };
                         d3dMultiPass->SetImageTargetRTV(ww.d3dBlit->GetRenderRTV(), rW, rH);
-                        d3dMultiPass->RenderImagePass(ctx, currentTime, timeDelta, frameCount,
-                                                       sMouse, date, rW, rH, ww.clickTime);
+                        d3dMultiPass->RenderImagePass(ctx, static_cast<float>(currentTime), static_cast<float>(timeDelta), frameCount,
+                                                       sMouse, date, rW, rH, static_cast<float>(ww.clickTime));
                         d3dRenderer->BeginFrame(ww.d3dSwapChainIndex);
                         ctx->VSSetShader(d3dRenderer->GetFullscreenVS(), nullptr, 0);
                         ww.d3dBlit->BlitToTarget(d3dRenderer->GetBackBufferRTV(ww.d3dSwapChainIndex),
@@ -2451,15 +2468,15 @@ int main(int argc, char* argv[]) {
                         d3dMultiPass->SetImageTargetRTV(nullptr);
                         d3dRenderer->BeginFrame(ww.d3dSwapChainIndex);
                         ctx->VSSetShader(d3dRenderer->GetFullscreenVS(), nullptr, 0);
-                        d3dMultiPass->RenderImagePass(ctx, currentTime, timeDelta, frameCount,
-                                                       localMouse, date, ww.width, ww.height, ww.clickTime);
+                        d3dMultiPass->RenderImagePass(ctx, static_cast<float>(currentTime), static_cast<float>(timeDelta), frameCount,
+                                                       localMouse, date, ww.width, ww.height, static_cast<float>(ww.clickTime));
                     }
 
                     // GPU timer End（幂等：只有第一次有效）
                     d3dMultiPass->EndGpuTimer();
 
                     if (config.showDebug) {
-                        fillDebugState(measuredFPS, currentTime, timeDelta, lastRenderElapsed,
+                        fillDebugState(measuredFPS, static_cast<float>(currentTime), static_cast<float>(timeDelta), lastRenderElapsed,
                                        static_cast<float>(ww.width),
                                        static_cast<float>(ww.height), localMouse);
 
@@ -2514,8 +2531,8 @@ int main(int argc, char* argv[]) {
                 bufferMouse[3] *= config.renderScale;
             }
 
-            multiPass.RenderBufferPasses(quadVAO, currentTime, timeDelta, frameCount,
-                                         bufferMouse, date, bufferW, bufferH, clickTime);
+            multiPass.RenderBufferPasses(quadVAO, static_cast<float>(currentTime), static_cast<float>(timeDelta), frameCount,
+                                         bufferMouse, date, bufferW, bufferH, static_cast<float>(clickTime));
 
             // 每个显示器各渲染 Image pass + blit + debug + swap
             for (auto& ww : wallpaperWindows) {
@@ -2554,14 +2571,14 @@ int main(int argc, char* argv[]) {
                     };
 
                     multiPass.SetImageTargetFBO(ww.blit->GetRenderFBO());
-                    multiPass.RenderImagePass(quadVAO, currentTime, timeDelta, frameCount,
-                                             scaledMouse, date, curRenderW, curRenderH, ww.clickTime);
+                    multiPass.RenderImagePass(quadVAO, static_cast<float>(currentTime), static_cast<float>(timeDelta), frameCount,
+                                             scaledMouse, date, curRenderW, curRenderH, static_cast<float>(ww.clickTime));
 
                     ww.blit->BlitToScreen(ww.width, ww.height);
                 } else {
                     multiPass.SetImageTargetFBO(0);
-                    multiPass.RenderImagePass(quadVAO, currentTime, timeDelta, frameCount,
-                                             localMouse, date, ww.width, ww.height, ww.clickTime);
+                    multiPass.RenderImagePass(quadVAO, static_cast<float>(currentTime), static_cast<float>(timeDelta), frameCount,
+                                             localMouse, date, ww.width, ww.height, static_cast<float>(ww.clickTime));
                 }
 
                 if (config.showDebug) {
@@ -2569,7 +2586,7 @@ int main(int argc, char* argv[]) {
                     Uint64 renderEnd = SDL_GetPerformanceCounter();
                     lastRenderElapsed = static_cast<float>(renderEnd - renderStart) / static_cast<float>(freq);
 
-                    fillDebugState(measuredFPS, currentTime, timeDelta, lastRenderElapsed,
+                    fillDebugState(measuredFPS, static_cast<float>(currentTime), static_cast<float>(timeDelta), lastRenderElapsed,
                                    static_cast<float>(ww.width),
                                    static_cast<float>(ww.height), localMouse);
 
@@ -2620,8 +2637,8 @@ int main(int argc, char* argv[]) {
                     float sMouse[4] = { mouse[0]*config.renderScale, mouse[1]*config.renderScale,
                                         mouse[2]*config.renderScale, mouse[3]*config.renderScale };
                     d3dMultiPass->SetImageTargetRTV(d3dWindowBlit->GetRenderRTV(), rW, rH);
-                    d3dMultiPass->RenderAllPasses(ctx, currentTime, timeDelta, frameCount,
-                                                   sMouse, date, rW, rH, clickTime);
+                    d3dMultiPass->RenderAllPasses(ctx, static_cast<float>(currentTime), static_cast<float>(timeDelta), frameCount,
+                                                   sMouse, date, rW, rH, static_cast<float>(clickTime));
                     d3dRenderer->BeginFrame(0);
                     ctx->VSSetShader(d3dRenderer->GetFullscreenVS(), nullptr, 0);
                     d3dWindowBlit->BlitToTarget(d3dRenderer->GetBackBufferRTV(0),
@@ -2630,13 +2647,13 @@ int main(int argc, char* argv[]) {
                     d3dMultiPass->SetImageTargetRTV(nullptr);
                     // 先渲染 Buffer passes（会改变 RTV 到各自的 FBO）
                     ctx->VSSetShader(d3dRenderer->GetFullscreenVS(), nullptr, 0);
-                    d3dMultiPass->RenderBufferPasses(ctx, currentTime, timeDelta, frameCount,
-                                                      mouse, date, config.width, config.height, clickTime);
+                    d3dMultiPass->RenderBufferPasses(ctx, static_cast<float>(currentTime), static_cast<float>(timeDelta), frameCount,
+                                                      mouse, date, config.width, config.height, static_cast<float>(clickTime));
                     // 重设 back buffer RTV，再渲染 Image pass
                     d3dRenderer->BeginFrame(0);
                     ctx->VSSetShader(d3dRenderer->GetFullscreenVS(), nullptr, 0);
-                    d3dMultiPass->RenderImagePass(ctx, currentTime, timeDelta, frameCount,
-                                                    mouse, date, config.width, config.height, clickTime);
+                    d3dMultiPass->RenderImagePass(ctx, static_cast<float>(currentTime), static_cast<float>(timeDelta), frameCount,
+                                                    mouse, date, config.width, config.height, static_cast<float>(clickTime));
                 }
 
                 // DebugUI 渲染
@@ -2646,7 +2663,7 @@ int main(int argc, char* argv[]) {
                     float renderElapsed = (gpuTime >= 0.0f) ? gpuTime
                         : static_cast<float>(SDL_GetPerformanceCounter() - renderStart) / static_cast<float>(freq);
 
-                    fillDebugState(measuredFPS, currentTime, timeDelta, renderElapsed,
+                    fillDebugState(measuredFPS, static_cast<float>(currentTime), static_cast<float>(timeDelta), renderElapsed,
                                    static_cast<float>(config.width),
                                    static_cast<float>(config.height), mouse);
 
@@ -2669,15 +2686,15 @@ int main(int argc, char* argv[]) {
                     }
 
                     multiPass.SetImageTargetFBO(blitRenderer.GetRenderFBO());
-                    multiPass.RenderAllPasses(quadVAO, currentTime, timeDelta, frameCount,
+                    multiPass.RenderAllPasses(quadVAO, static_cast<float>(currentTime), static_cast<float>(timeDelta), frameCount,
                                              mouse, date, blitRenderer.GetRenderWidth(),
-                                             blitRenderer.GetRenderHeight(), clickTime);
+                                             blitRenderer.GetRenderHeight(), static_cast<float>(clickTime));
 
                     blitRenderer.BlitToScreen(config.width, config.height);
                 } else {
                     multiPass.SetImageTargetFBO(0);
-                    multiPass.RenderAllPasses(quadVAO, currentTime, timeDelta, frameCount,
-                                             mouse, date, config.width, config.height, clickTime);
+                    multiPass.RenderAllPasses(quadVAO, static_cast<float>(currentTime), static_cast<float>(timeDelta), frameCount,
+                                             mouse, date, config.width, config.height, static_cast<float>(clickTime));
                 }
 
                 // DebugUI 渲染（在 shader 渲染后、SwapWindow 前）
@@ -2686,7 +2703,7 @@ int main(int argc, char* argv[]) {
                     Uint64 renderEnd = SDL_GetPerformanceCounter();
                     float renderElapsed = static_cast<float>(renderEnd - renderStart) / static_cast<float>(freq);
 
-                    fillDebugState(measuredFPS, currentTime, timeDelta, renderElapsed,
+                    fillDebugState(measuredFPS, static_cast<float>(currentTime), static_cast<float>(timeDelta), renderElapsed,
                                    static_cast<float>(config.width),
                                    static_cast<float>(config.height), mouse);
 
