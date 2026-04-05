@@ -18,6 +18,11 @@ struct D3D11SwapChainInfo {
     HWND hwnd = nullptr;
     int width = 0;
     int height = 0;
+
+    // Pause snapshot: cached last frame for stable display when paused
+    ComPtr<ID3D11Texture2D> snapshotTex;
+    ComPtr<ID3D11ShaderResourceView> snapshotSRV;
+    bool snapshotValid = false;
 };
 
 /// D3D11Renderer 管理 D3D11 设备、上下文和多个 SwapChain（壁纸模式多显示器）。
@@ -69,12 +74,28 @@ public:
     /// 获取全屏三角形的顶点着色器（供其他模块的 PSO 使用）
     ID3D11VertexShader* GetFullscreenVS() const { return fullscreenVS_.Get(); }
 
+    // ---- Pause Snapshot API ----
+
+    /// Copy current back buffer content to snapshot texture (call before Present)
+    bool CopyToSnapshot(int swapChainIndex);
+
+    /// Blit snapshot texture to back buffer (call after BeginFrame, before DebugUI)
+    void BlitSnapshotToBackBuffer(int swapChainIndex);
+
+    /// Check if a valid snapshot exists for the given swap chain
+    bool HasSnapshot(int swapChainIndex) const;
+
+    /// Mark snapshot as invalid (e.g. on resume, resize, renderScale change)
+    void InvalidateSnapshot(int swapChainIndex);
+
     /// 获取初始化错误信息
     const std::string& GetLastError() const { return lastError_; }
 
 private:
     bool CreateBackBufferRTV(D3D11SwapChainInfo& info);
     bool CreateFullscreenTriangleVS();
+    bool CreateSnapshotResources(D3D11SwapChainInfo& info);
+    bool CreateBlitPipeline();
 
     ComPtr<ID3D11Device> device_;
     ComPtr<ID3D11DeviceContext> context_;
@@ -85,6 +106,10 @@ private:
     // 全屏三角形 VS（所有 pass 共享）
     ComPtr<ID3D11VertexShader> fullscreenVS_;
     ComPtr<ID3D10Blob> fullscreenVSBlob_;
+
+    // Blit pipeline for snapshot rendering
+    ComPtr<ID3D11PixelShader> blitPS_;
+    ComPtr<ID3D11SamplerState> blitSampler_;
 
     std::vector<D3D11SwapChainInfo> swapChains_;
     std::string lastError_;

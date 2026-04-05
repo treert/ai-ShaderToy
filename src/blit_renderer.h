@@ -36,6 +36,22 @@ public:
     /// 调用前应已 glBindFramebuffer(GL_FRAMEBUFFER, 0) 或绑定目标 FBO
     void BlitToScreen(int viewportWidth, int viewportHeight);
 
+    // ---- Pause Snapshot API ----
+
+    /// Capture current default framebuffer (or render FBO) content as snapshot
+    /// @param width  framebuffer width to read
+    /// @param height framebuffer height to read
+    bool CaptureSnapshot(int width, int height);
+
+    /// Blit snapshot texture to default framebuffer (screen)
+    void BlitSnapshotToScreen(int viewportWidth, int viewportHeight);
+
+    /// Check if a valid snapshot exists
+    bool HasSnapshot() const { return snapshotValid_; }
+
+    /// Mark snapshot as invalid
+    void InvalidateSnapshot() { snapshotValid_ = false; }
+
     /// 释放所有 OpenGL 资源
     void Cleanup();
 
@@ -53,4 +69,11 @@ private:
     GLuint renderTex_ = 0;
     int renderWidth_ = 0;
     int renderHeight_ = 0;
+
+    // Pause snapshot
+    GLuint snapshotFBO_ = 0;
+    GLuint snapshotTex_ = 0;
+    int snapshotWidth_ = 0;
+    int snapshotHeight_ = 0;
+    bool snapshotValid_ = false;
 };

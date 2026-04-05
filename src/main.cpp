@@ -1645,6 +1645,7 @@ int main(int argc, char* argv[]) {
     // 系统托盘（壁纸模式下启用）
     // ============================================================
     std::atomic<bool> paused{false};
+    bool wasPaused = false;  // Track pause state transitions for snapshot capture
     bool running = true;
     std::string trayShaderSwitchRequest;  // 托盘菜单 shader 切换请求
     bool trayDebugToggleRequest = false;  // 托盘菜单 debug 切换请求
@@ -2132,6 +2133,22 @@ int main(int argc, char* argv[]) {
                         multiPass.Resize(config.width, config.height);
                     }
                 }
+
+                // Invalidate snapshot when renderScale changes (paused display will show black until resume)
+#ifdef _WIN32
+                if (useD3D11 && d3dRenderer) {
+                    if (config.wallpaperMode) {
+                        for (auto& ww : wallpaperWindows) {
+                            d3dRenderer->InvalidateSnapshot(ww.d3dSwapChainIndex);
+                        }
+                    } else {
+                        d3dRenderer->InvalidateSnapshot(0);
+                    }
+                } else
+#endif
+                {
+                    blitRenderer.InvalidateSnapshot();
+                }
             }
         }
 
@@ -2254,30 +2271,73 @@ int main(int argc, char* argv[]) {
                     std::cerr << "Shader reload failed: " << lastShaderError << std::endl;
                 }
             }
+
+            // Invalidate snapshot after shader reload (new shader content needs re-capture)
+#ifdef _WIN32
+            if (useD3D11 && d3dRenderer) {
+                if (config.wallpaperMode) {
+                    for (auto& ww : wallpaperWindows) {
+                        d3dRenderer->InvalidateSnapshot(ww.d3dSwapChainIndex);
+                    }
+                } else {
+                    d3dRenderer->InvalidateSnapshot(0);
+                }
+            } else
+#endif
+            {
+                blitRenderer.InvalidateSnapshot();
+            }
         }
 
-        // 暂停时跳过 shader 渲染，但仍渲染 DebugUI
+        // 暂停时跳过 shader 渲染，使用缓存的 snapshot 保持画面稳定
         if (paused) {
+            wasPaused = true;
+
             if (!config.wallpaperMode) {
+                // ---- Window mode paused ----
                 fillDebugState(0.0f, static_cast<float>(lastFrameTime), 0.0f, 0.0f,
                                static_cast<float>(config.width),
                                static_cast<float>(config.height), mouse);
 
+                bool debugVisible = debugUI.IsVisible();
+
+                if (debugVisible) {
+                    // DebugUI visible: blit snapshot as background + render DebugUI
 #ifdef _WIN32
-                if (useD3D11 && d3dRenderer) {
-                    d3dRenderer->BeginFrame(0);
-                    debugUI.SetD3D11RenderTarget(d3dRenderer->GetBackBufferRTV(0));
-                    debugUI.BeginFrame();
-                    debugUI.Render(debugState);
-                    d3dRenderer->Present(0, 0);
-                } else
+                    if (useD3D11 && d3dRenderer) {
+                        d3dRenderer->BeginFrame(0);
+                        if (d3dRenderer->HasSnapshot(0)) {
+                            d3dRenderer->BlitSnapshotToBackBuffer(0);
+                        } else {
+                            const float black[4] = {0, 0, 0, 1};
+                            d3dRenderer->ClearBackBuffer(0, black);
+                        }
+                        debugUI.SetD3D11RenderTarget(d3dRenderer->GetBackBufferRTV(0));
+                        debugUI.BeginFrame();
+                        debugUI.Render(debugState);
+                        d3dRenderer->Present(0, 0);
+                    } else
 #endif
-                {
-                    debugUI.BeginFrame();
-                    debugUI.Render(debugState);
-                    SDL_GL_SwapWindow(window);
+                    {
+                        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                        glViewport(0, 0, config.width, config.height);
+                        if (blitRenderer.HasSnapshot()) {
+                            blitRenderer.BlitSnapshotToScreen(config.width, config.height);
+                        } else {
+                            glClearColor(0, 0, 0, 1);
+                            glClear(GL_COLOR_BUFFER_BIT);
+                        }
+                        debugUI.BeginFrame();
+                        debugUI.Render(debugState);
+                        SDL_GL_SwapWindow(window);
+                    }
+                    SDL_Delay(30);  // ~30fps when DebugUI visible
+                } else {
+                    // DebugUI not visible: skip all rendering, minimal CPU usage
+                    SDL_Delay(50);
                 }
             } else {
+                // ---- Wallpaper mode paused ----
                 if (config.showDebug) {
 #ifdef _WIN32
                     if (useD3D11 && d3dRenderer) {
@@ -2287,6 +2347,12 @@ int main(int argc, char* argv[]) {
                                            static_cast<float>(ww.height), mouse);
 
                             d3dRenderer->BeginFrame(ww.d3dSwapChainIndex);
+                            if (d3dRenderer->HasSnapshot(ww.d3dSwapChainIndex)) {
+                                d3dRenderer->BlitSnapshotToBackBuffer(ww.d3dSwapChainIndex);
+                            } else {
+                                const float black[4] = {0, 0, 0, 1};
+                                d3dRenderer->ClearBackBuffer(ww.d3dSwapChainIndex, black);
+                            }
                             debugUI.SetD3D11RenderTarget(d3dRenderer->GetBackBufferRTV(ww.d3dSwapChainIndex));
                             debugUI.BeginFrame(ww.width, ww.height);
                             debugUI.RenderOverlay(debugState);
@@ -2301,6 +2367,14 @@ int main(int argc, char* argv[]) {
                                            static_cast<float>(ww.width),
                                            static_cast<float>(ww.height), mouse);
 
+                            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                            glViewport(0, 0, ww.width, ww.height);
+                            if (blitRenderer.HasSnapshot()) {
+                                blitRenderer.BlitSnapshotToScreen(ww.width, ww.height);
+                            } else {
+                                glClearColor(0, 0, 0, 1);
+                                glClear(GL_COLOR_BUFFER_BIT);
+                            }
                             debugUI.BeginFrame(ww.width, ww.height);
                             debugUI.RenderOverlay(debugState);
                             SDL_GL_SwapWindow(ww.window);
@@ -2322,6 +2396,25 @@ int main(int argc, char* argv[]) {
                 SDL_Delay(100);
             }
             continue;
+        }
+
+        // Detect resume from pause: invalidate snapshot
+        if (wasPaused) {
+            wasPaused = false;
+#ifdef _WIN32
+            if (useD3D11 && d3dRenderer) {
+                if (config.wallpaperMode) {
+                    for (auto& ww : wallpaperWindows) {
+                        d3dRenderer->InvalidateSnapshot(ww.d3dSwapChainIndex);
+                    }
+                } else {
+                    d3dRenderer->InvalidateSnapshot(0);
+                }
+            } else
+#endif
+            {
+                blitRenderer.InvalidateSnapshot();
+            }
         }
 
         // 壁纸模式：每秒检测一次全屏应用和显示器遮挡
@@ -2475,6 +2568,9 @@ int main(int argc, char* argv[]) {
                     // GPU timer End（幂等：只有第一次有效）
                     d3dMultiPass->EndGpuTimer();
 
+                    // Capture snapshot before DebugUI overlay
+                    d3dRenderer->CopyToSnapshot(ww.d3dSwapChainIndex);
+
                     if (config.showDebug) {
                         fillDebugState(measuredFPS, static_cast<float>(currentTime), static_cast<float>(timeDelta), lastRenderElapsed,
                                        static_cast<float>(ww.width),
@@ -2590,8 +2686,14 @@ int main(int argc, char* argv[]) {
                                    static_cast<float>(ww.width),
                                    static_cast<float>(ww.height), localMouse);
 
+                    // Capture snapshot before DebugUI overlay
+                    blitRenderer.CaptureSnapshot(ww.width, ww.height);
+
                     debugUI.BeginFrame(ww.width, ww.height);
                     debugUI.RenderOverlay(debugState);
+                } else {
+                    // Capture snapshot even without debug UI
+                    blitRenderer.CaptureSnapshot(ww.width, ww.height);
                 }
 
                 SDL_GL_SwapWindow(ww.window);
@@ -2656,6 +2758,9 @@ int main(int argc, char* argv[]) {
                                                     mouse, date, config.width, config.height, static_cast<float>(clickTime));
                 }
 
+                // Capture snapshot before DebugUI overlay (shader-only content)
+                d3dRenderer->CopyToSnapshot(0);
+
                 // DebugUI 渲染
                 {
                     d3dMultiPass->EndGpuTimer();
@@ -2696,6 +2801,9 @@ int main(int argc, char* argv[]) {
                     multiPass.RenderAllPasses(quadVAO, static_cast<float>(currentTime), static_cast<float>(timeDelta), frameCount,
                                              mouse, date, config.width, config.height, static_cast<float>(clickTime));
                 }
+
+                // Capture snapshot before DebugUI overlay (shader-only content)
+                blitRenderer.CaptureSnapshot(config.width, config.height);
 
                 // DebugUI 渲染（在 shader 渲染后、SwapWindow 前）
                 {

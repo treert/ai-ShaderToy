@@ -137,6 +137,82 @@ void BlitRenderer::BlitToScreen(int viewportWidth, int viewportHeight) {
     glBindVertexArray(0);
 }
 
+// ---- Pause Snapshot Implementation ----
+
+bool BlitRenderer::CaptureSnapshot(int width, int height) {
+    // Auto-initialize blit shader if not yet initialized (needed for snapshot-only usage)
+    if (!initialized_) {
+        if (!Init()) return false;
+    }
+
+    // Recreate snapshot texture if size changed
+    if (snapshotTex_ == 0 || snapshotWidth_ != width || snapshotHeight_ != height) {
+        if (snapshotFBO_) {
+            glDeleteFramebuffers(1, &snapshotFBO_);
+            glDeleteTextures(1, &snapshotTex_);
+            snapshotFBO_ = 0;
+            snapshotTex_ = 0;
+        }
+
+        glGenFramebuffers(1, &snapshotFBO_);
+        glGenTextures(1, &snapshotTex_);
+
+        glBindTexture(GL_TEXTURE_2D, snapshotTex_);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, snapshotFBO_);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, snapshotTex_, 0);
+
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            std::cerr << "BlitRenderer: Snapshot FBO incomplete!" << std::endl;
+            glDeleteFramebuffers(1, &snapshotFBO_);
+            glDeleteTextures(1, &snapshotTex_);
+            snapshotFBO_ = 0;
+            snapshotTex_ = 0;
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            return false;
+        }
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+        snapshotWidth_ = width;
+        snapshotHeight_ = height;
+    }
+
+    // Copy default framebuffer (back buffer) to snapshot FBO
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, snapshotFBO_);
+    glBlitFramebuffer(0, 0, width, height,
+                      0, 0, width, height,
+                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    snapshotValid_ = true;
+    return true;
+}
+
+void BlitRenderer::BlitSnapshotToScreen(int viewportWidth, int viewportHeight) {
+    if (!snapshotValid_ || !snapshotTex_) return;
+    // Auto-initialize blit shader if needed
+    if (!initialized_) {
+        if (!Init()) return;
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, viewportWidth, viewportHeight);
+    glUseProgram(blitProgram_);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, snapshotTex_);
+    glUniform1i(uTexLocation_, 0);
+    glBindVertexArray(blitVAO_);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+}
+
 void BlitRenderer::Cleanup() {
     if (renderFBO_) {
         glDeleteFramebuffers(1, &renderFBO_);
@@ -144,6 +220,13 @@ void BlitRenderer::Cleanup() {
         renderFBO_ = 0;
         renderTex_ = 0;
     }
+    if (snapshotFBO_) {
+        glDeleteFramebuffers(1, &snapshotFBO_);
+        glDeleteTextures(1, &snapshotTex_);
+        snapshotFBO_ = 0;
+        snapshotTex_ = 0;
+    }
+    snapshotValid_ = false;
     if (blitProgram_) {
         glDeleteProgram(blitProgram_);
         blitProgram_ = 0;
